@@ -1,11 +1,10 @@
-version: '3.8'
-
 services:
   cartenz-smartgov-backup-gateway:
     image: adityabintang/smartgov-backup-gateway:v1.0
+    build: .
     container_name: cartenz-smartgov-backup-gateway
     restart: unless-stopped
     ports:
-      - "25100:25100"
+      - "${GATEWAY_BIND_ADDR:-127.0.0.1}:25100:25100"
     volumes:
       - ./gateway_data:/app/data

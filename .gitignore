@@ -1,0 +1,4 @@
+.env
+gateway_data/
+__pycache__/
+*.py[cod]
