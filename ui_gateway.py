@@ -632,7 +632,10 @@ def rotate_agent_backups(
                 item for item in response.get("Contents", [])
                 if item.get("Key", "").startswith(prefix) and not item.get("Key", "").endswith("/")
             )
-            if not response.get("IsTruncated"):
+            is_truncated = response.get("IsTruncated", False)
+            if isinstance(is_truncated, str):
+                is_truncated = is_truncated.strip().lower() == "true"
+            if not is_truncated:
                 break
             next_marker = response.get("NextMarker") or (
                 response.get("Contents", [])[-1].get("Key", "") if response.get("Contents") else ""
