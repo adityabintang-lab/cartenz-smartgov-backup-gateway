@@ -246,7 +246,7 @@ function renderDashboard() {
         <section class="card">
             <div class="toolbar"><h2>Token Agent Target</h2></div>
             <form class="form-row" onsubmit="createToken(event)" style="margin-bottom:14px">
-                <div class="field"><label for="serverName">Nama server target</label><input id="serverName" placeholder="Contoh: Dinas Kesehatan" maxlength="100" required></div>
+                <div class="field"><label for="serverName">Nama daerah / Agent</label><input id="serverName" placeholder="Contoh: Kabupaten Bogor" maxlength="100" required></div>
                 <button class="primary" type="submit">Generate token</button>
             </form>
             <div class="scroll"><table><thead><tr><th>Nama server</th><th>Agent API token</th><th class="right">Aksi</th></tr></thead>
@@ -443,10 +443,16 @@ def get_tokens(username: str = Depends(verify_credentials)):
     return {"tokens": cfg.get("tokens", {})}
 
 @app.post("/api/tokens/create")
-def create_token(server_name: str = Query(...), username: str = Depends(verify_credentials)):
+def create_token(server_name: str = Query(..., min_length=1, max_length=100), username: str = Depends(verify_credentials)):
     cfg = load_config()
-    new_token = f"sgtok_{secrets.token_hex(16)}"
+    server_name = server_name.strip()
+    folder_name = _server_folder_name(server_name)
+    if not server_name or not folder_name.strip("_") or any(ord(char) < 32 or ord(char) == 127 for char in server_name):
+        raise HTTPException(status_code=400, detail="Nama daerah/Agent tidak valid.")
     tokens = cfg.get("tokens", {})
+    if any(_server_folder_name(str(existing_name)) == folder_name for existing_name in tokens.values()):
+        raise HTTPException(status_code=409, detail="Nama daerah/Agent tersebut sudah digunakan.")
+    new_token = f"sgtok_{secrets.token_hex(16)}"
     tokens[new_token] = server_name
     cfg["tokens"] = tokens
     save_config(cfg)
@@ -481,6 +487,20 @@ def _valid_backup_path(value: str, *, allow_folder: bool) -> bool:
     if any(part in (".", "..") for part in parts):
         return False
     return allow_folder or not value.endswith("/")
+
+
+def _agent_server_name(authorization: str, cfg: Dict[str, Any]) -> str:
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(status_code=401, detail="Token Agent diperlukan.")
+    server_name = cfg.get("tokens", {}).get(token.strip())
+    if not server_name:
+        raise HTTPException(status_code=401, detail="Token Target Agent tidak valid.")
+    return server_name
+
+
+def _server_folder_name(server_name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", server_name.lower().replace(" ", "_"))
 
 
 @app.get("/api/bucket/objects")
@@ -555,18 +575,13 @@ def get_download_url(key: str = Query(...), username: str = Depends(verify_crede
 def get_upload_url(
     request: Request, 
     filename: str, 
+    category: str = Query("archive"),
     authorization: str = Header(None)  # <--- PERBAIKAN DI SINI
 ):
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Header Authorization diperlukan.")
-        
-    token = authorization.replace("Bearer ", "").strip()
+    if category not in ("database", "application", "archive"):
+        raise HTTPException(status_code=400, detail="Kategori backup tidak valid.")
     cfg = load_config()
-    tokens = cfg.get("tokens", {})
-    server_name = tokens.get(token)
-    
-    if not server_name:
-        raise HTTPException(status_code=401, detail="Token Target Agent tidak valid.")
+    server_name = _agent_server_name(authorization, cfg)
     
     # Sanitasi nama berkas untuk mencegah Path Traversal
     safe_filename = os.path.basename(filename)
@@ -574,8 +589,9 @@ def get_upload_url(
     
     try:
         client = _cos_client(cfg)
-        folder_name = re.sub(r'[^a-zA-Z0-9_-]', '_', server_name.lower().replace(' ', '_'))
-        cos_key = f"backups/{folder_name}/{safe_filename}"
+        folder_name = _server_folder_name(server_name)
+        category_path = "" if category == "archive" else f"{category}/"
+        cos_key = f"backups/{folder_name}/{category_path}{safe_filename}"
         
         upload_url = client.get_presigned_url(
             Method="PUT", 
@@ -586,3 +602,57 @@ def get_upload_url(
         return {"upload_url": upload_url, "cos_key": cos_key}
     except Exception as e:
         raise HTTPException(status_code=500, detail="Gagal membuat Presigned URL.")
+
+
+@app.post("/api/v1/rotate-backups")
+@limiter.limit("30/minute")
+def rotate_agent_backups(
+    request: Request,
+    category: str = Query(..., pattern="^(database|application)$"),
+    max_files: int = Query(..., ge=1, le=3650),
+    authorization: str = Header(None),
+):
+    cfg = load_config()
+    server_name = _agent_server_name(authorization, cfg)
+    prefix = f"backups/{_server_folder_name(server_name)}/{category}/"
+    client = _cos_client(cfg)
+    objects = []
+    marker = ""
+    try:
+        while True:
+            params = {
+                "Bucket": cfg["cos_bucket"],
+                "Prefix": prefix,
+                "MaxKeys": 1000,
+            }
+            if marker:
+                params["Marker"] = marker
+            response = client.list_objects(**params)
+            objects.extend(
+                item for item in response.get("Contents", [])
+                if item.get("Key", "").startswith(prefix) and not item.get("Key", "").endswith("/")
+            )
+            if not response.get("IsTruncated"):
+                break
+            next_marker = response.get("NextMarker") or (
+                response.get("Contents", [])[-1].get("Key", "") if response.get("Contents") else ""
+            )
+            if not next_marker or next_marker == marker:
+                raise RuntimeError("COS tidak mengembalikan penanda halaman yang valid.")
+            marker = next_marker
+
+        objects.sort(key=lambda item: (item.get("LastModified", ""), item.get("Key", "")))
+        excess = max(0, len(objects) - max_files)
+        oldest_keys = [item["Key"] for item in objects[:excess]]
+        for offset in range(0, len(oldest_keys), 1000):
+            batch = oldest_keys[offset:offset + 1000]
+            result = client.delete_objects(
+                Bucket=cfg["cos_bucket"],
+                Delete={"Quiet": True, "Object": [{"Key": key} for key in batch]},
+            )
+            if result.get("Errors"):
+                raise RuntimeError("COS gagal menghapus satu atau lebih arsip lama.")
+    except Exception as exc:
+        logger.exception("Gagal merotasi objek backup Agent di COS.")
+        raise HTTPException(status_code=502, detail="Rotasi arsip di bucket COS gagal.") from exc
+    return {"deleted": excess, "remaining": len(objects) - excess}

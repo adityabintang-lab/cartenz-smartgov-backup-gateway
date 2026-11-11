@@ -54,16 +54,18 @@ Pada kunjungan pertama, wizard meminta:
 - Username dan password admin (minimal 6 karakter).
 - Tencent Cloud COS Secret ID, Secret Key, region, dan nama bucket.
 
-Siapkan kredensial COS dengan hak minimum yang diperlukan untuk membuat presigned upload URL, membaca daftar objek, dan mengunduh objek pada prefix backup. Setelah setup, login menggunakan kredensial admin yang dibuat.
+Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar objek, mengunduh objek, dan menghapus objek lama pada prefix backup. Izin hapus diperlukan agar retensi otomatis per Agent dapat berjalan. Batasi izin tersebut hanya pada bucket/prefix backup. Setelah setup, login menggunakan kredensial admin yang dibuat.
 
 ## Dashboard
 
 - Buat, salin, dan hapus token untuk tiap Agent target.
-- Telusuri folder dan file pada prefix `backups/` di bucket COS.
+- Telusuri folder berdasarkan nama Agent/daerah pada prefix `backups/`, dengan subfolder `database/` dan `application/`.
 - Lihat ukuran dan waktu perubahan file, berpindah folder, dan memuat halaman berikutnya.
 - Unduh file lewat tautan presigned yang berlaku singkat.
 
-Daftar objek dan tautan unduhan hanya tersedia setelah autentikasi admin. Dashboard tidak menyediakan penghapusan objek COS.
+Daftar objek dan tautan unduhan hanya tersedia setelah autentikasi admin. Penghapusan objek lama dilakukan otomatis oleh retensi Agent; dashboard tidak menyediakan penghapusan manual.
+
+Setiap token Agent menggunakan folder berdasarkan nama token/daerah; nama yang menghasilkan folder sama ditolak agar arsip tidak tercampur. Retensi awal Agent menjaga 7 arsip database dan 2 arsip aplikasi per folder; file COS tertua di kategori tersebut dihapus setelah upload baru berhasil.
 
 ## Menghubungkan Agent
 
