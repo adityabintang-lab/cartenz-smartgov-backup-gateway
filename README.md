@@ -68,6 +68,38 @@ Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar 
 
 Daftar objek dan tautan unduhan hanya tersedia setelah autentikasi admin. Penghapusan objek lama dilakukan otomatis oleh retensi Agent; dashboard tidak menyediakan penghapusan manual.
 
+### Cara mendekripsi dan memulihkan backup
+
+1. Pastikan Gateway sudah dibangun ulang dengan image terbaru (`docker compose up -d --build`); image harus memiliki program `age`.
+2. Siapkan private key yang cocok dengan public key age yang dipakai saat backup dibuat. Jika belum punya keypair, buat di komputer tepercaya, bukan di server:
+
+   ```bash
+   age-keygen -o kunci-backup.txt
+   ```
+
+   Masukkan public key (`age1...`) pada Pengaturan Agent sebelum backup berikutnya. Simpan `kunci-backup.txt` secara offline dan aman. Private key yang tidak cocok tidak dapat mendekripsi arsip.
+3. Buka dashboard Gateway melalui HTTPS atau SSH tunnel, lalu login sebagai admin.
+4. Telusuri `backups/` → folder Agent/daerah → `database/` atau `application/`.
+5. Pada file berakhiran `.age`, pilih **Dekripsi**. Tempel seluruh isi private key (baris `AGE-SECRET-KEY-...`) ke prompt; jangan masukkan path file. Gateway memproses hanya arsip yang dipilih, lalu browser mengunduh hasil `.tar.gz`.
+6. Hasil dekripsi **tidak terenkripsi**. Simpan di media yang terlindungi, ekstrak di mesin restore tepercaya, dan hapus salinan sementara setelah selesai.
+
+Contoh pemulihan database di Linux (ganti nama file dan kredensial sesuai lingkungan):
+
+```bash
+mkdir -p ./restore/database
+tar -xzf smartgov_database_TIMESTAMP.tar.gz -C ./restore/database
+mariadb -h HOST -u USER -p < ./restore/database/database.sql
+```
+
+Contoh ekstraksi backup aplikasi ke direktori staging untuk diperiksa sebelum dipulihkan:
+
+```bash
+mkdir -p ./restore/application
+tar -xzf smartgov_application_TIMESTAMP.tar.gz -C ./restore/application
+```
+
+Jangan mengekstrak arsip langsung ke direktori produksi sebelum memeriksa isinya. Proses dekripsi menggunakan streaming di Gateway, tetapi browser dashboard mengumpulkan file hasil sebelum mengunduh; komputer pengguna perlu ruang/memori yang cukup untuk ukuran arsip.
+
 Setiap token Agent menggunakan folder berdasarkan nama token/daerah; nama yang menghasilkan folder sama ditolak agar arsip tidak tercampur. Retensi awal Agent menjaga 7 arsip database dan 2 arsip aplikasi per folder; file COS tertua di kategori tersebut dihapus setelah upload baru berhasil.
 
 ## Menghubungkan Agent
