@@ -545,6 +545,13 @@ def _cos_client(cfg: Dict[str, Any]) -> CosS3Client:
     return CosS3Client(cos_config)
 
 
+def _close_cos_response_body(body):
+    try:
+        body.get_raw_stream().close()
+    except Exception:
+        logger.exception("Gagal menutup stream arsip dari COS.")
+
+
 def _valid_backup_path(value: str, *, allow_folder: bool) -> bool:
     if not value.startswith("backups/") or "\\" in value or len(value) > 1024:
         return False
@@ -680,12 +687,12 @@ async def decrypt_backup(request: Request, payload: Dict[str, Any], username: st
         first_chunk = await asyncio.to_thread(body.read, 65536)
     except Exception as exc:
         if body is not None:
-            body.close()
+            _close_cos_response_body(body)
         logger.exception("Gagal mengambil objek terenkripsi dari COS.")
         raise HTTPException(status_code=502, detail="Gagal mengambil arsip backup dari bucket COS.") from exc
 
     if not first_chunk:
-        body.close()
+        _close_cos_response_body(body)
         raise HTTPException(status_code=400, detail="Arsip backup kosong atau rusak.")
 
     tmp_path = None
@@ -695,7 +702,7 @@ async def decrypt_backup(request: Request, payload: Dict[str, Any], username: st
             f.write(private_key.encode("utf-8"))
         os.chmod(tmp_path, 0o600)
     except OSError as exc:
-        body.close()
+        _close_cos_response_body(body)
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
         raise HTTPException(status_code=500, detail="Tidak dapat menyiapkan file sementara untuk dekripsi.") from exc
@@ -758,7 +765,7 @@ async def decrypt_backup(request: Request, payload: Dict[str, Any], username: st
             logger.exception("Streaming dekripsi arsip gagal.")
             raise
         finally:
-            body.close()
+            _close_cos_response_body(body)
             for task in (feeder, stderr_reader):
                 if task and not task.done():
                     task.cancel()
