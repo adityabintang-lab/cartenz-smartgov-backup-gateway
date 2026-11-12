@@ -5,6 +5,7 @@ import hashlib
 import logging
 import re
 import asyncio
+import time
 import tempfile
 import shutil
 from typing import Dict, Any
@@ -81,7 +82,7 @@ def save_config(data: Dict[str, Any]):
             pass
         raise
 
-def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
+def _authenticate(credentials: HTTPBasicCredentials) -> Dict[str, str]:
     cfg = load_config()
     admin_user = cfg.get("admin_user", "admin")
     stored_hash = cfg.get("admin_password_hash", "")
@@ -96,15 +97,189 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
         is_valid = (secrets.compare_digest(credentials.username, admin_user) and 
                     secrets.compare_digest(calc_hash, stored_hash))
     else:
-        raise HTTPException(status_code=503, detail="Gateway belum dikonfigurasi via Web Wizard.")
+        is_valid = False
 
-    if not is_valid:
-        raise HTTPException(status_code=401, detail="Kredensial tidak valid.", headers={"WWW-Authenticate": "Basic"})
-    return credentials.username
+    if is_valid:
+        return {"role": "admin", "identity": credentials.username}
+
+    email = credentials.username.strip().lower()
+    configured_users = cfg.get("users", {})
+    users = configured_users if isinstance(configured_users, dict) else {}
+    account = users.get(email)
+    if isinstance(account, dict):
+        stored_user_hash = account.get("password_hash", "")
+        user_salt = account.get("salt", "")
+        if stored_user_hash and user_salt:
+            calculated_hash, _ = hash_password(credentials.password, user_salt)
+            if secrets.compare_digest(calculated_hash, stored_user_hash):
+                if account.get("status") != "approved":
+                    raise HTTPException(status_code=403, detail="Akun menunggu persetujuan admin.")
+                folders = account.get("folders", [])
+                if not isinstance(folders, list):
+                    folders = []
+                return {
+                    "role": "viewer",
+                    "identity": email,
+                    "folders": [folder for folder in folders if isinstance(folder, str)],
+                }
+
+    if not (cfg.get("admin_password_hash") or "admin_password" in cfg) or not cfg.get("cos_secret_id"):
+        raise HTTPException(status_code=503, detail="Gateway belum dikonfigurasi via Web Wizard.")
+    raise HTTPException(status_code=401, detail="Kredensial tidak valid.", headers={"WWW-Authenticate": "Basic"})
+
+
+def get_current_user(credentials: HTTPBasicCredentials = Depends(security)) -> Dict[str, str]:
+    return _authenticate(credentials)
+
+
+def verify_credentials(user: Dict[str, str] = Depends(get_current_user)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Akses khusus admin.")
+    return user["identity"]
 
 @app.get("/healthz")
 def health_check():
     return {"status": "ok"}
+
+
+@app.get("/api/auth/me")
+@limiter.limit("10/minute")
+def auth_me(request: Request, user: Dict[str, str] = Depends(get_current_user)):
+    return {"role": user["role"], "identity": user["identity"]}
+
+
+@app.post("/api/auth/register")
+@limiter.limit("5/minute")
+def register_user(request: Request, payload: Dict[str, Any]):
+    cfg = load_config()
+    if not (cfg.get("admin_password_hash") or "admin_password" in cfg) or not cfg.get("cos_secret_id"):
+        raise HTTPException(status_code=503, detail="Gateway belum dikonfigurasi via Web Wizard.")
+
+    email = payload.get("email", "")
+    password = payload.get("password", "")
+    if not isinstance(email, str) or len(email) > 254 or not re.fullmatch(
+        r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+",
+        email,
+    ):
+        raise HTTPException(status_code=400, detail="Alamat email tidak valid.")
+    if (
+        not isinstance(password, str)
+        or len(password) < 12
+        or len(password) > 256
+        or any(ord(char) < 32 or ord(char) == 127 for char in password)
+    ):
+        raise HTTPException(status_code=400, detail="Password harus berisi 12 hingga 256 karakter.")
+
+    email = email.lower()
+    admin_user = str(cfg.get("admin_user", "")).lower()
+    configured_users = cfg.get("users", {})
+    users = configured_users if isinstance(configured_users, dict) else {}
+    if email == admin_user or email in users:
+        raise HTTPException(status_code=409, detail="Email sudah terdaftar.")
+
+    password_hash, salt = hash_password(password)
+    cfg["users"] = users
+    users[email] = {
+        "password_hash": password_hash,
+        "salt": salt,
+        "status": "pending",
+        "created_at": time.time(),
+    }
+    save_config(cfg)
+    return {"status": "pending", "message": "Pendaftaran diterima dan menunggu persetujuan admin."}
+
+
+@app.get("/api/registrations")
+def list_users(username: str = Depends(verify_credentials)):
+    cfg = load_config()
+    users = cfg.get("users", {})
+    tokens = cfg.get("tokens", {})
+    if not isinstance(users, dict):
+        users = {}
+    return {
+        "users": [
+            {
+                "email": email,
+                "status": account.get("status", "pending"),
+                "created_at": account.get("created_at"),
+                "folders": account.get("folders", []),
+            }
+            for email, account in sorted(users.items())
+            if isinstance(account, dict)
+        ],
+        "agents": [
+            {"folder": _server_folder_name(name), "name": name}
+            for name in tokens.values()
+            if isinstance(name, str) and _server_folder_name(name).strip("_")
+        ] if isinstance(tokens, dict) else [],
+    }
+
+
+@app.post("/api/registrations/approve")
+def approve_user(payload: Dict[str, Any], username: str = Depends(verify_credentials)):
+    email = payload.get("email", "")
+    folders = payload.get("folders")
+    if not isinstance(email, str) or not 3 <= len(email) <= 254:
+        raise HTTPException(status_code=400, detail="Alamat email tidak valid.")
+    if not isinstance(folders, list) or not 1 <= len(folders) <= 100:
+        raise HTTPException(status_code=400, detail="Pilih satu atau beberapa Agent untuk user ini.")
+    if any(not isinstance(folder, str) for folder in folders) or len(set(folders)) != len(folders):
+        raise HTTPException(status_code=400, detail="Daftar folder Agent tidak valid.")
+
+    normalized_email = email.strip().lower()
+    cfg = load_config()
+    users = cfg.get("users", {})
+    tokens = cfg.get("tokens", {})
+    if not isinstance(users, dict) or not isinstance(tokens, dict):
+        raise HTTPException(status_code=503, detail="Data user atau token Gateway tidak valid.")
+    account = users.get(normalized_email)
+    if not isinstance(account, dict):
+        raise HTTPException(status_code=404, detail="Pendaftar tidak ditemukan.")
+    if account.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="Akun tidak sedang menunggu persetujuan.")
+    available_folders = {
+        _server_folder_name(name)
+        for name in tokens.values()
+        if isinstance(name, str) and _server_folder_name(name).strip("_")
+    }
+    if any(folder not in available_folders for folder in folders):
+        raise HTTPException(status_code=400, detail="Folder Agent yang dipilih tidak tersedia.")
+    account["status"] = "approved"
+    account["folders"] = folders
+    account["approved_at"] = time.time()
+    save_config(cfg)
+    return {"status": "approved", "folders": folders}
+
+
+@app.delete("/api/registrations/pending")
+def reject_user(email: str = Query(..., min_length=3, max_length=254), username: str = Depends(verify_credentials)):
+    normalized_email = email.strip().lower()
+    cfg = load_config()
+    users = cfg.get("users", {})
+    account = users.get(normalized_email)
+    if not isinstance(account, dict):
+        raise HTTPException(status_code=404, detail="Pendaftar tidak ditemukan.")
+    if account.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="Hanya pendaftaran yang masih menunggu yang dapat ditolak.")
+    del users[normalized_email]
+    save_config(cfg)
+    return {"status": "rejected"}
+
+
+@app.delete("/api/registrations/approved")
+def revoke_user(email: str = Query(..., min_length=3, max_length=254), username: str = Depends(verify_credentials)):
+    normalized_email = email.strip().lower()
+    cfg = load_config()
+    users = cfg.get("users", {})
+    if not isinstance(users, dict):
+        raise HTTPException(status_code=404, detail="User aktif tidak ditemukan.")
+    account = users.get(normalized_email)
+    if not isinstance(account, dict) or account.get("status") != "approved":
+        raise HTTPException(status_code=404, detail="User aktif tidak ditemukan.")
+    del users[normalized_email]
+    save_config(cfg)
+    return {"status": "revoked"}
+
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -144,7 +319,7 @@ def index():
             border:1px solid var(--bd); border-radius:8px; cursor:pointer; }
         button.primary { background:var(--pri); border-color:var(--pri); color:#fff; font-weight:600; }
         button:disabled { opacity:.6; cursor:not-allowed; }
-        input { width:100%; min-height:44px; padding:8px 12px; font:inherit; color:inherit;
+        input,select { width:100%; min-height:44px; padding:8px 12px; font:inherit; color:inherit;
             background:var(--in); border:1px solid var(--bd); border-radius:8px; }
         label { display:block; font-size:.9rem; margin-bottom:4px; }
         .field { min-width:0; flex:1 1 220px; }
@@ -181,6 +356,7 @@ def index():
 <script>
 const isSetup = __IS_SETUP__;
 let authHeader = localStorage.getItem('gw_auth') || '';
+let currentRole = '';
 let currentPrefix = 'backups/';
 let nextMarker = '';
 
@@ -212,25 +388,58 @@ function renderLoginForm() {
     document.getElementById('app').innerHTML = `
         <section class="card" style="max-width:450px;margin:40px auto">
             <h2>Masuk ke Gateway</h2>
-            <form onsubmit="handleLogin(event)">
-                <div class="field"><label for="login_user">Username admin</label><input id="login_user" autocomplete="username" required></div>
+            <form id="loginForm" onsubmit="handleLogin(event)">
+                <div class="field"><label for="login_user">Email atau username admin</label><input id="login_user" type="text" autocomplete="username" required></div>
                 <div class="field" style="margin-top:12px"><label for="login_pass">Password</label><input id="login_pass" type="password" autocomplete="current-password" required></div>
                 <button class="primary" style="width:100%;margin-top:16px">Masuk</button>
             </form>
+            <hr style="border:0;border-top:1px solid var(--bd);margin:20px 0">
+            <button type="button" onclick="renderRegisterForm()">Daftar sebagai user biasa</button>
         </section>`;
 }
 async function handleLogin(event) {
     event.preventDefault();
-    authHeader = 'Basic ' + btoa(document.getElementById('login_user').value + ':' + document.getElementById('login_pass').value);
+    const credentials = document.getElementById('login_user').value.trim() + ':' + document.getElementById('login_pass').value;
+    authHeader = 'Basic ' + btoa(String.fromCharCode(...new TextEncoder().encode(credentials)));
     try {
-        await api('/api/tokens');
+        const user = await api('/api/auth/me');
         localStorage.setItem('gw_auth', authHeader);
         showAlert('');
-        renderDashboard();
+        currentRole = user.role;
+        if (currentRole === 'admin') renderDashboard();
+        else renderViewer();
     } catch (error) {
         authHeader = '';
         showAlert(error.message);
     }
+}
+function renderRegisterForm() {
+    document.getElementById('app').innerHTML = `
+        <section class="card" style="max-width:450px;margin:40px auto">
+            <h2>Daftar user biasa</h2>
+            <p class="muted">Akses diberikan setelah admin Gateway menyetujui pendaftaran.</p>
+            <form onsubmit="handleRegister(event)">
+                <div class="field"><label for="register_email">Email</label><input id="register_email" type="email" maxlength="254" autocomplete="email" required></div>
+                <div class="field" style="margin-top:12px"><label for="register_password">Password (minimal 12 karakter)</label><input id="register_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></div>
+                <button class="primary" style="width:100%;margin-top:16px">Kirim pendaftaran</button>
+            </form>
+            <button type="button" style="margin-top:12px" onclick="renderLoginForm()">Kembali ke login</button>
+        </section>`;
+}
+async function handleRegister(event) {
+    event.preventDefault();
+    try {
+        const result = await api('/api/auth/register', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                email:document.getElementById('register_email').value.trim(),
+                password:document.getElementById('register_password').value
+            })
+        });
+        renderLoginForm();
+        showAlert(result.message, 'ok');
+    } catch (error) { showAlert(error.message); }
 }
 function renderSetupWizard() {
     document.getElementById('app').innerHTML = `
@@ -271,6 +480,7 @@ async function saveSetup(event) {
     } catch (error) { showAlert(error.message); }
 }
 function renderDashboard() {
+    currentRole = 'admin';
     document.getElementById('authStatus').innerHTML = '<button type="button" onclick="logout()">Keluar</button>';
     document.getElementById('app').innerHTML = `
         <section class="card">
@@ -282,6 +492,12 @@ function renderDashboard() {
             </div>
         </section>
         <section class="card">
+            <div class="toolbar"><div><h2>Pendaftaran user</h2><div class="muted">Setujui atau tolak permintaan akses baca-saja.</div></div>
+                <button type="button" onclick="loadUsers()">Muat ulang</button></div>
+            <div class="scroll"><table><thead><tr><th>Email</th><th>Status</th><th>Agent diizinkan</th><th>Terdaftar</th><th class="right">Aksi</th></tr></thead>
+                <tbody id="userTable"><tr><td colspan="5" class="muted">Memuat pendaftaran…</td></tr></tbody></table></div>
+        </section>
+        <section class="card">
             <div class="toolbar"><h2>Token Agent Target</h2></div>
             <form class="form-row" onsubmit="createToken(event)" style="margin-bottom:14px">
                 <div class="field"><label for="serverName">Nama daerah / Agent</label><input id="serverName" placeholder="Contoh: Kabupaten Bogor" maxlength="100" required></div>
@@ -290,6 +506,13 @@ function renderDashboard() {
             <div class="scroll"><table><thead><tr><th>Nama server</th><th>Agent API token</th><th class="right">Aksi</th></tr></thead>
                 <tbody id="tokenTable"><tr><td colspan="3" class="muted">Memuat data token…</td></tr></tbody></table></div>
         </section>
+        ${bucketBrowserMarkup()}`;
+    loadUsers();
+    loadTokens();
+    loadObjects(currentPrefix, '');
+}
+function bucketBrowserMarkup() {
+    return `
         <section class="card">
             <div class="toolbar"><div><h2>File di Bucket</h2><div class="muted" id="bucketPath">backups/</div></div>
                 <button type="button" onclick="loadObjects(currentPrefix, '')">Muat ulang</button></div>
@@ -302,8 +525,95 @@ function renderDashboard() {
                 <span class="muted" id="objectPage"></span><button id="nextPage" type="button" hidden>Berikutnya</button>
             </div>
         </section>`;
-    loadTokens();
+}
+function renderViewer() {
+    currentRole = 'viewer';
+    document.getElementById('authStatus').innerHTML = '<button type="button" onclick="logout()">Keluar</button>';
+    document.getElementById('app').innerHTML = `
+        <section class="card">
+            <h2>Arsip backup</h2>
+            <p class="muted">Akses baca-saja. File yang diunduh tetap terenkripsi; fitur token dan dekripsi hanya tersedia untuk admin.</p>
+            <div class="grid"><div><div class="k">Bucket</div><div class="v" id="bucketName">Memuat…</div></div></div>
+        </section>
+        ${bucketBrowserMarkup()}`;
     loadObjects(currentPrefix, '');
+}
+async function loadUsers() {
+    const tbody = document.getElementById('userTable');
+    if (!tbody) return;
+    try {
+        const data = await api('/api/registrations');
+        tbody.textContent = '';
+        const users = data.users || [];
+        const agents = data.agents || [];
+        if (!users.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="muted">Belum ada pendaftaran.</td></tr>';
+            return;
+        }
+        users.forEach(user => {
+            const tr = document.createElement('tr');
+            const email = document.createElement('td'); email.textContent = user.email;
+            const status = document.createElement('td'); status.textContent = user.status === 'approved' ? 'Disetujui' : 'Menunggu';
+            const scope = document.createElement('td');
+            const created = document.createElement('td'); created.textContent = formatDate(user.created_at ? new Date(user.created_at * 1000).toISOString() : '');
+            const actions = document.createElement('td'); actions.className = 'right';
+            if (user.status === 'pending') {
+                const select = document.createElement('select');
+                select.multiple = true;
+                select.size = Math.min(Math.max(agents.length, 2), 5);
+                select.setAttribute('aria-label', 'Pilih Agent yang boleh dilihat user ini');
+                agents.forEach(agent => {
+                    const option = document.createElement('option');
+                    option.value = agent.folder;
+                    option.textContent = agent.name;
+                    select.append(option);
+                });
+                scope.append(select);
+                const approve = document.createElement('button'); approve.textContent = 'Setujui'; approve.disabled = !agents.length;
+                approve.onclick = () => approveUser(user.email, select);
+                const reject = document.createElement('button'); reject.textContent = 'Tolak'; reject.style.marginLeft = '6px'; reject.onclick = () => rejectUser(user.email);
+                actions.append(approve, reject);
+            } else {
+                const labels = (user.folders || []).map(folder => {
+                    const agent = agents.find(item => item.folder === folder);
+                    return agent ? agent.name : folder;
+                });
+                scope.textContent = labels.join(', ') || 'Tidak ada Agent diizinkan';
+                const revoke = document.createElement('button'); revoke.textContent = 'Cabut akses'; revoke.onclick = () => revokeUser(user.email);
+                actions.append(revoke);
+            }
+            tr.append(email, status, scope, created, actions); tbody.append(tr);
+        });
+    } catch (error) { showAlert('Gagal memuat pendaftaran: ' + error.message); }
+}
+async function approveUser(email, select) {
+    const folders = Array.from(select.selectedOptions, option => option.value);
+    if (!folders.length) { showAlert('Pilih minimal satu Agent untuk user ini.'); return; }
+    try {
+        await api('/api/registrations/approve', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({email, folders})
+        });
+        showAlert('Akun ' + email + ' disetujui.', 'ok');
+        loadUsers();
+    } catch (error) { showAlert('Gagal menyetujui akun: ' + error.message); }
+}
+async function rejectUser(email) {
+    if (!confirm('Tolak dan hapus pendaftaran ' + email + '?')) return;
+    try {
+        await api('/api/registrations/pending?email=' + encodeURIComponent(email), {method:'DELETE'});
+        showAlert('Pendaftaran ditolak.', 'ok');
+        loadUsers();
+    } catch (error) { showAlert('Gagal menolak pendaftaran: ' + error.message); }
+}
+async function revokeUser(email) {
+    if (!confirm('Cabut akses baca-saja untuk ' + email + '?')) return;
+    try {
+        await api('/api/registrations/approved?email=' + encodeURIComponent(email), {method:'DELETE'});
+        showAlert('Akses user dicabut.', 'ok');
+        loadUsers();
+    } catch (error) { showAlert('Gagal mencabut akses: ' + error.message); }
 }
 async function loadTokens() {
     const tbody = document.getElementById('tokenTable');
@@ -413,6 +723,7 @@ async function loadObjects(prefix, marker) {
             if (!entry.folder) {
                 const download = document.createElement('button'); download.textContent = 'Unduh';
                 download.onclick = () => downloadObject(entry.key);
+                if (currentRole === 'admin') {
                 const decrypt = document.createElement('button'); decrypt.textContent = 'Dekripsi';
                 decrypt.style.marginLeft = '6px';
                 decrypt.onclick = async () => {
@@ -443,6 +754,7 @@ async function loadObjects(prefix, marker) {
                     }
                 };
                 actions.append(download, decrypt);
+                } else actions.append(download);
             }
             tr.append(nameCell, size, modified, actions); tbody.append(tr);
         });
@@ -470,9 +782,22 @@ async function downloadObject(key) {
         showAlert('Gagal membuat tautan unduhan: ' + error.message);
     }
 }
-if (!isSetup) renderSetupWizard();
-else if (!authHeader) renderLoginForm();
-else renderDashboard();
+async function bootstrapAuth() {
+    if (!isSetup) { renderSetupWizard(); return; }
+    if (!authHeader) { renderLoginForm(); return; }
+    try {
+        const user = await api('/api/auth/me');
+        currentRole = user.role;
+        if (currentRole === 'admin') renderDashboard();
+        else renderViewer();
+    } catch (error) {
+        localStorage.removeItem('gw_auth');
+        authHeader = '';
+        renderLoginForm();
+        showAlert(error.message);
+    }
+}
+bootstrapAuth();
 </script>
 </body>
 </html>"""
@@ -584,6 +909,17 @@ def _valid_backup_path(value: str, *, allow_folder: bool) -> bool:
     return allow_folder or not value.endswith("/")
 
 
+def _viewer_folder_prefixes(user: Dict[str, str]) -> list[str]:
+    folders = user.get("folders", [])
+    if not isinstance(folders, list):
+        return []
+    return [
+        f"backups/{folder}/"
+        for folder in folders
+        if isinstance(folder, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,100}", folder)
+    ]
+
+
 def _agent_server_name(authorization: str, cfg: Dict[str, Any]) -> str:
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
@@ -615,7 +951,7 @@ def _safe_private_key(private_key: str) -> str:
 def list_bucket_objects(
     prefix: str = Query("backups/"),
     marker: str = Query(""),
-    username: str = Depends(verify_credentials),
+    user: Dict[str, str] = Depends(get_current_user),
 ):
     if not _valid_backup_path(prefix, allow_folder=True):
         raise HTTPException(status_code=400, detail="Lokasi bucket tidak valid.")
@@ -623,6 +959,24 @@ def list_bucket_objects(
         raise HTTPException(status_code=400, detail="Penanda halaman tidak valid.")
 
     cfg = load_config()
+    if user["role"] == "viewer":
+        folder_prefixes = _viewer_folder_prefixes(user)
+        if prefix == "backups/":
+            if marker:
+                raise HTTPException(status_code=400, detail="Penanda halaman tidak valid.")
+            return {
+                "bucket": cfg["cos_bucket"],
+                "prefix": prefix,
+                "folders": folder_prefixes,
+                "objects": [],
+                "is_truncated": False,
+                "next_marker": "",
+            }
+        if not any(prefix.startswith(folder) for folder in folder_prefixes):
+            raise HTTPException(status_code=403, detail="User tidak memiliki akses ke folder Agent ini.")
+        if marker and not any(marker.startswith(folder) for folder in folder_prefixes):
+            raise HTTPException(status_code=403, detail="Penanda halaman di luar cakupan akses user.")
+
     try:
         params = {
             "Bucket": cfg["cos_bucket"],
@@ -662,9 +1016,15 @@ def list_bucket_objects(
 
 
 @app.get("/api/bucket/download")
-def get_download_url(key: str = Query(...), username: str = Depends(verify_credentials)):
+def get_download_url(key: str = Query(...), user: Dict[str, str] = Depends(get_current_user)):
     if not _valid_backup_path(key, allow_folder=False):
         raise HTTPException(status_code=400, detail="Lokasi file tidak valid.")
+    if user["role"] == "viewer" and not key.endswith(".age"):
+        raise HTTPException(status_code=403, detail="User biasa hanya dapat mengunduh arsip terenkripsi.")
+    if user["role"] == "viewer" and not any(
+        key.startswith(folder) for folder in _viewer_folder_prefixes(user)
+    ):
+        raise HTTPException(status_code=403, detail="User tidak memiliki akses ke folder Agent ini.")
     cfg = load_config()
     try:
         download_url = _cos_client(cfg).get_presigned_url(

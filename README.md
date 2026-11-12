@@ -1,6 +1,6 @@
 # SmartGOV Backup Gateway
 
-Gateway pusat mengelola token agent dan menyediakan akses admin ke daftar arsip backup di Tencent Cloud COS. Agent meminta presigned upload URL dari Gateway; kredensial master COS tidak perlu dipasang di server Agent.
+Gateway pusat mengelola token Agent dan menyediakan akses admin serta user baca-saja ke arsip backup di Tencent Cloud COS. Agent meminta presigned upload URL dari Gateway; kredensial master COS tidak perlu dipasang di server Agent.
 
 ## Setup cepat
 
@@ -45,7 +45,7 @@ Dashboard: `http://127.0.0.1:25100`. Bind address bisa diatur lewat `.env`:
 GATEWAY_BIND_ADDR=127.0.0.1
 ```
 
-Jangan membuka dashboard HTTP langsung ke jaringan publik. Jika akses jaringan diperlukan, batasi port dengan firewall dan gunakan HTTPS reverse proxy. Gateway memakai HTTP Basic untuk autentikasi admin.
+Jangan membuka dashboard HTTP langsung ke jaringan publik. Jika akses jaringan diperlukan, batasi port dengan firewall dan gunakan HTTPS reverse proxy. Gateway memakai HTTP Basic untuk autentikasi admin dan user baca-saja; kredensial email/password harus dikirim melalui HTTPS atau SSH tunnel.
 
 Gateway menolak path probe umum seperti `/.env`, `/.git`, `wp-admin`, dan `cgi-bin` dengan 404, serta mengirim header keamanan pada respons. Ini bukan firewall dan tidak menghentikan scanner mengirim request; pertahankan access log untuk pemantauan, batasi akses di firewall/reverse proxy, dan jangan mengekspos port HTTP langsung. Jika log menampilkan alamat Docker seperti `172.19.0.1`, itu biasanya alamat proxy/container di sisi depan, bukan IP klien asli; pastikan proxy mencatat IP klien dan jangan mempercayai header `X-Forwarded-For` dari koneksi yang tidak tepercaya.
 
@@ -65,8 +65,9 @@ Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar 
 - Lihat ukuran dan waktu perubahan file, berpindah folder, dan memuat halaman berikutnya.
 - Unduh file lewat tautan presigned yang berlaku singkat.
 - Dekripsi arsip `.age` dari browser setelah admin memasukkan private key age. Private key tidak disimpan permanen, tetapi sementara ditulis ke file mode `0600` di `/tmp` untuk dipakai program `age`, lalu file tersebut dihapus. Karena itu lindungi host/container Gateway dan jangan menganggap ini setara decrypt sepenuhnya di perangkat pengguna.
+- Daftarkan user baca-saja memakai email dan password minimal 12 karakter. Akun berstatus pending sampai admin menyetujuinya dan memilih folder Agent yang boleh diakses; admin dapat menolak pendaftaran atau mencabut akses user aktif.
 
-Daftar objek dan tautan unduhan hanya tersedia setelah autentikasi admin. Penghapusan objek lama dilakukan otomatis oleh retensi Agent; dashboard tidak menyediakan penghapusan manual.
+User baca-saja hanya dapat melihat daftar arsip, ukuran, dan waktu perubahan pada folder Agent yang diberikan admin, serta mengunduh file `.age` terenkripsi dalam cakupan tersebut. Batas folder ditegakkan oleh API Gateway. Mereka tidak dapat melihat atau mengelola token, menyetujui akun, mengakses folder Agent lain, mengunduh file non-`.age`, maupun memakai dekripsi. Admin tetap dapat melihat semua fitur termasuk token dan dekripsi. Penghapusan objek lama dilakukan otomatis oleh retensi Agent; dashboard tidak menyediakan penghapusan manual.
 
 ### Cara mendekripsi dan memulihkan backup
 
