@@ -47,6 +47,8 @@ GATEWAY_BIND_ADDR=127.0.0.1
 
 Jangan membuka dashboard HTTP langsung ke jaringan publik. Jika akses jaringan diperlukan, batasi port dengan firewall dan gunakan HTTPS reverse proxy. Gateway memakai HTTP Basic untuk autentikasi admin.
 
+Gateway menolak path probe umum seperti `/.env`, `/.git`, `wp-admin`, dan `cgi-bin` dengan 404, serta mengirim header keamanan pada respons. Ini bukan firewall dan tidak menghentikan scanner mengirim request; pertahankan access log untuk pemantauan, batasi akses di firewall/reverse proxy, dan jangan mengekspos port HTTP langsung. Jika log menampilkan alamat Docker seperti `172.19.0.1`, itu biasanya alamat proxy/container di sisi depan, bukan IP klien asli; pastikan proxy mencatat IP klien dan jangan mempercayai header `X-Forwarded-For` dari koneksi yang tidak tepercaya.
+
 ## Konfigurasi awal
 
 Pada kunjungan pertama, wizard meminta:
@@ -62,6 +64,7 @@ Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar 
 - Telusuri folder berdasarkan nama Agent/daerah pada prefix `backups/`, dengan subfolder `database/` dan `application/`.
 - Lihat ukuran dan waktu perubahan file, berpindah folder, dan memuat halaman berikutnya.
 - Unduh file lewat tautan presigned yang berlaku singkat.
+- Dekripsi arsip `.age` dari browser setelah admin memasukkan private key age. Private key tidak disimpan permanen, tetapi sementara ditulis ke file mode `0600` di `/tmp` untuk dipakai program `age`, lalu file tersebut dihapus. Karena itu lindungi host/container Gateway dan jangan menganggap ini setara decrypt sepenuhnya di perangkat pengguna.
 
 Daftar objek dan tautan unduhan hanya tersedia setelah autentikasi admin. Penghapusan objek lama dilakukan otomatis oleh retensi Agent; dashboard tidak menyediakan penghapusan manual.
 

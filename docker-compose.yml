@@ -8,3 +8,10 @@ services:
       - "${GATEWAY_BIND_ADDR:-127.0.0.1}:25100:25100"
     volumes:
       - ./gateway_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

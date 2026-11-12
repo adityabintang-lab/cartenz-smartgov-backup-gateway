@@ -4,9 +4,12 @@ import secrets
 import hashlib
 import logging
 import re
+import asyncio
+import tempfile
+import shutil
 from typing import Dict, Any
 from fastapi import FastAPI, Request, Depends, HTTPException, status, Query, Header
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from qcloud_cos import CosConfig, CosS3Client
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -22,6 +25,28 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 security = HTTPBasic()
+_SCAN_SEGMENTS = {
+    ".git", ".github", ".svn", ".hg", "admin", "cgi-bin",
+    "phpmyadmin", "wp-admin", "wp-content", "wp-includes",
+}
+
+
+@app.middleware("http")
+async def harden_requests(request: Request, call_next):
+    path_segments = [segment.lower() for segment in request.url.path.split("/") if segment]
+    if any(
+        segment in _SCAN_SEGMENTS or segment == ".env" or segment.startswith(".env.")
+        for segment in path_segments
+    ):
+        response = JSONResponse(status_code=404, content={"detail": "Not Found"})
+    else:
+        response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 def hash_password(password: str, salt: str = None) -> tuple[str, str]:
     if not salt:
@@ -39,9 +64,22 @@ def load_config() -> Dict[str, Any]:
     return {}
 
 def save_config(data: Dict[str, Any]):
-    os.makedirs(os.path.dirname(CONFIG_FILE), exist_ok=True)
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    config_dir = os.path.dirname(CONFIG_FILE)
+    os.makedirs(config_dir, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".gateway-config-", dir=config_dir)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
     cfg = load_config()
@@ -375,7 +413,36 @@ async function loadObjects(prefix, marker) {
             if (!entry.folder) {
                 const download = document.createElement('button'); download.textContent = 'Unduh';
                 download.onclick = () => downloadObject(entry.key);
-                actions.append(download);
+                const decrypt = document.createElement('button'); decrypt.textContent = 'Dekripsi';
+                decrypt.style.marginLeft = '6px';
+                decrypt.onclick = async () => {
+                    const privateKey = window.prompt('Masukkan private key age dari file kunci-backup.txt (teks lengkap):');
+                    if (!privateKey) return;
+                    try {
+                        const response = await fetch('/api/bucket/decrypt', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json', 'Authorization': authHeader},
+                            body: JSON.stringify({key: entry.key, private_key: privateKey})
+                        });
+                        if (!response.ok) {
+                            const err = await response.json().catch(() => ({detail: 'Dekripsi gagal.'}));
+                            throw new Error(err.detail || 'Dekripsi gagal.');
+                        }
+                        const blob = await response.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = entry.key.replace(/\\.age$/, '');
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        setTimeout(() => URL.revokeObjectURL(url), 1000);
+                        showAlert('File berhasil didekripsi.', 'ok');
+                    } catch (error) {
+                        showAlert(error.message);
+                    }
+                };
+                actions.append(download, decrypt);
             }
             tr.append(nameCell, size, modified, actions); tbody.append(tr);
         });
@@ -503,6 +570,19 @@ def _server_folder_name(server_name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", server_name.lower().replace(" ", "_"))
 
 
+def _safe_private_key(private_key: str) -> str:
+    if not isinstance(private_key, str):
+        raise ValueError("Private key harus berupa teks.")
+    cleaned = private_key.strip()
+    if not cleaned or "\x00" in cleaned or len(cleaned) > 65536:
+        raise ValueError("Private key tidak valid.")
+    if not re.fullmatch(r"[\x20-\x7E\r\n]+", cleaned):
+        raise ValueError("Private key hanya boleh berisi karakter ASCII aman.")
+    if "AGE-SECRET-KEY-" not in cleaned:
+        raise ValueError("Private key age tidak valid.")
+    return cleaned
+
+
 @app.get("/api/bucket/objects")
 def list_bucket_objects(
     prefix: str = Query("backups/"),
@@ -569,6 +649,139 @@ def get_download_url(key: str = Query(...), username: str = Depends(verify_crede
         logger.exception("Gagal membuat tautan unduhan COS.")
         raise HTTPException(status_code=502, detail="Gagal membuat tautan unduhan dari bucket COS.") from exc
     return {"download_url": download_url}
+
+
+@app.post("/api/bucket/decrypt")
+@limiter.limit("3/minute")
+async def decrypt_backup(request: Request, payload: Dict[str, Any], username: str = Depends(verify_credentials)):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Payload harus berupa objek JSON.")
+
+    key = str(payload.get("key", "")).strip()
+    private_key = str(payload.get("private_key", "")).strip()
+    if not _valid_backup_path(key, allow_folder=False) or not key.endswith(".age"):
+        raise HTTPException(status_code=400, detail="Lokasi file arsip tidak valid.")
+
+    try:
+        private_key = _safe_private_key(private_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not shutil.which("age"):
+        raise HTTPException(status_code=500, detail="Program age tidak tersedia di server gateway.")
+
+    cfg = load_config()
+    body = None
+    try:
+        obj = await asyncio.to_thread(_cos_client(cfg).get_object, Bucket=cfg["cos_bucket"], Key=key)
+        body = obj.get("Body")
+        if body is None:
+            raise RuntimeError("COS tidak mengembalikan isi objek.")
+        first_chunk = await asyncio.to_thread(body.read, 65536)
+    except Exception as exc:
+        if body is not None:
+            body.close()
+        logger.exception("Gagal mengambil objek terenkripsi dari COS.")
+        raise HTTPException(status_code=502, detail="Gagal mengambil arsip backup dari bucket COS.") from exc
+
+    if not first_chunk:
+        body.close()
+        raise HTTPException(status_code=400, detail="Arsip backup kosong atau rusak.")
+
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(prefix="smartgov-age-", suffix=".txt")
+        with os.fdopen(fd, "wb") as f:
+            f.write(private_key.encode("utf-8"))
+        os.chmod(tmp_path, 0o600)
+    except OSError as exc:
+        body.close()
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise HTTPException(status_code=500, detail="Tidak dapat menyiapkan file sementara untuk dekripsi.") from exc
+
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(key).removesuffix(".age")) or "backup"
+
+    async def decrypted_chunks():
+        proc = None
+        feeder = None
+        stderr_reader = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "age", "-d", "-i", tmp_path,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            async def feed_ciphertext():
+                try:
+                    chunk = first_chunk
+                    while chunk:
+                        proc.stdin.write(chunk)
+                        await proc.stdin.drain()
+                        chunk = await asyncio.to_thread(body.read, 65536)
+                finally:
+                    if proc.stdin and not proc.stdin.is_closing():
+                        proc.stdin.close()
+                        await proc.stdin.wait_closed()
+
+            async def collect_stderr():
+                while True:
+                    chunk = await proc.stderr.read(4096)
+                    if not chunk:
+                        break
+
+            feeder = asyncio.create_task(feed_ciphertext())
+            stderr_reader = asyncio.create_task(collect_stderr())
+            deadline = asyncio.get_running_loop().time() + 21600
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("Decrypt arsip melebihi batas waktu.")
+                chunk = await asyncio.wait_for(proc.stdout.read(65536), timeout=remaining)
+                if not chunk:
+                    break
+                yield chunk
+
+            await feeder
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise TimeoutError("Decrypt arsip melebihi batas waktu.")
+            return_code = await asyncio.wait_for(proc.wait(), timeout=remaining)
+            await stderr_reader
+            if return_code != 0:
+                raise RuntimeError("Private key tidak cocok atau arsip terenkripsi tidak valid.")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Streaming dekripsi arsip gagal.")
+            raise
+        finally:
+            body.close()
+            for task in (feeder, stderr_reader):
+                if task and not task.done():
+                    task.cancel()
+            if proc and proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    logger.exception("Gagal menghapus file private key sementara.")
+
+    return StreamingResponse(
+        decrypted_chunks(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}"',
+            "Content-Security-Policy": "default-src 'none'",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
+    )
+
 
 @app.post("/api/v1/get-upload-url")
 @limiter.limit("30/minute")

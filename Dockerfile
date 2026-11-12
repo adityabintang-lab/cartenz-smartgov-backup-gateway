@@ -3,6 +3,8 @@ FROM python:3.11-slim
 # Install system dependencies & curl untuk healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    age \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
