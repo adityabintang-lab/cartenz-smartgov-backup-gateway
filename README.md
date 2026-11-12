@@ -56,7 +56,7 @@ Pada kunjungan pertama, wizard meminta:
 - Username dan password admin (minimal 6 karakter).
 - Tencent Cloud COS Secret ID, Secret Key, region, dan nama bucket.
 
-Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar objek, mengunduh objek, dan menghapus objek lama pada prefix backup. Izin hapus diperlukan agar retensi otomatis per Agent dapat berjalan. Batasi izin tersebut hanya pada bucket/prefix backup. Setelah setup, login menggunakan kredensial admin yang dibuat.
+Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar objek, mengunduh objek, menghapus objek lama, dan menjalankan multipart upload pada prefix backup. Multipart upload memerlukan izin memulai, mengunggah bagian, menyelesaikan, dan membatalkan upload. Izin hapus diperlukan agar retensi otomatis per Agent dapat berjalan. Batasi izin tersebut hanya pada bucket/prefix backup dan aktifkan aturan siklus hidup untuk membersihkan multipart upload yang tidak selesai. Setelah setup, login menggunakan kredensial admin yang dibuat.
 
 ## Dashboard
 

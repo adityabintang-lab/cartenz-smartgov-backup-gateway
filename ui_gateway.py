@@ -552,6 +552,27 @@ def _close_cos_response_body(body):
         logger.exception("Gagal menutup stream arsip dari COS.")
 
 
+def _agent_cos_key(server_name: str, filename: str, category: str) -> str:
+    if category not in ("database", "application", "archive"):
+        raise HTTPException(status_code=400, detail="Kategori backup tidak valid.")
+    if not isinstance(filename, str) or not filename or len(filename) > 255:
+        raise HTTPException(status_code=400, detail="Nama berkas tidak valid.")
+    safe_filename = re.sub(r"[^a-zA-Z0-9_.-]", "_", os.path.basename(filename))
+    if safe_filename in ("", ".", ".."):
+        raise HTTPException(status_code=400, detail="Nama berkas tidak valid.")
+    folder_name = _server_folder_name(server_name)
+    category_path = "" if category == "archive" else f"{category}/"
+    return f"backups/{folder_name}/{category_path}{safe_filename}"
+
+
+def _multipart_part_size(file_size: int) -> int:
+    if type(file_size) is not int or file_size <= 0 or file_size > 50_000_000_000_000:
+        raise HTTPException(status_code=400, detail="Ukuran arsip tidak valid atau melebihi batas COS.")
+    minimum_size = 64 * 1024 * 1024
+    max_parts = 10_000
+    return max(minimum_size, (file_size + max_parts - 1) // max_parts)
+
+
 def _valid_backup_path(value: str, *, allow_folder: bool) -> bool:
     if not value.startswith("backups/") or "\\" in value or len(value) > 1024:
         return False
@@ -798,21 +819,11 @@ def get_upload_url(
     category: str = Query("archive"),
     authorization: str = Header(None)  # <--- PERBAIKAN DI SINI
 ):
-    if category not in ("database", "application", "archive"):
-        raise HTTPException(status_code=400, detail="Kategori backup tidak valid.")
     cfg = load_config()
     server_name = _agent_server_name(authorization, cfg)
-    
-    # Sanitasi nama berkas untuk mencegah Path Traversal
-    safe_filename = os.path.basename(filename)
-    safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', safe_filename)
-    
+    cos_key = _agent_cos_key(server_name, filename, category)
     try:
         client = _cos_client(cfg)
-        folder_name = _server_folder_name(server_name)
-        category_path = "" if category == "archive" else f"{category}/"
-        cos_key = f"backups/{folder_name}/{category_path}{safe_filename}"
-        
         upload_url = client.get_presigned_url(
             Method="PUT", 
             Bucket=cfg["cos_bucket"], 
@@ -822,6 +833,157 @@ def get_upload_url(
         return {"upload_url": upload_url, "cos_key": cos_key}
     except Exception as e:
         raise HTTPException(status_code=500, detail="Gagal membuat Presigned URL.")
+
+
+@app.post("/api/v1/multipart/initiate")
+@limiter.limit("10/minute")
+def initiate_multipart_upload(
+    request: Request,
+    payload: Dict[str, Any],
+    authorization: str = Header(None),
+):
+    cfg = load_config()
+    server_name = _agent_server_name(authorization, cfg)
+    filename = payload.get("filename")
+    category = payload.get("category")
+    file_size = payload.get("file_size")
+    cos_key = _agent_cos_key(server_name, filename, category)
+    part_size = _multipart_part_size(file_size)
+    total_parts = (file_size + part_size - 1) // part_size
+
+    try:
+        result = _cos_client(cfg).create_multipart_upload(
+            Bucket=cfg["cos_bucket"],
+            Key=cos_key,
+        )
+        upload_id = result.get("UploadId")
+        if not isinstance(upload_id, str) or not upload_id or len(upload_id) > 1024:
+            raise RuntimeError("COS tidak mengembalikan upload ID multipart yang valid.")
+    except Exception as exc:
+        logger.exception("Gagal memulai multipart upload COS.")
+        raise HTTPException(status_code=502, detail="Gagal memulai unggahan multipart ke COS.") from exc
+
+    return {
+        "upload_id": upload_id,
+        "part_size": part_size,
+        "total_parts": total_parts,
+    }
+
+
+@app.post("/api/v1/multipart/part-urls")
+@limiter.limit("30/minute")
+def get_multipart_part_urls(
+    request: Request,
+    payload: Dict[str, Any],
+    authorization: str = Header(None),
+):
+    cfg = load_config()
+    server_name = _agent_server_name(authorization, cfg)
+    cos_key = _agent_cos_key(server_name, payload.get("filename"), payload.get("category"))
+    upload_id = payload.get("upload_id")
+    part_numbers = payload.get("part_numbers")
+    if not isinstance(upload_id, str) or not upload_id or len(upload_id) > 1024:
+        raise HTTPException(status_code=400, detail="Upload ID multipart tidak valid.")
+    if (
+        not isinstance(part_numbers, list)
+        or not 1 <= len(part_numbers) <= 8
+        or any(type(number) is not int or not 1 <= number <= 10_000 for number in part_numbers)
+        or part_numbers != sorted(set(part_numbers))
+    ):
+        raise HTTPException(status_code=400, detail="Daftar nomor bagian multipart tidak valid.")
+
+    try:
+        client = _cos_client(cfg)
+        part_urls = [
+            {
+                "part_number": number,
+                "upload_url": client.get_presigned_url(
+                    Method="PUT",
+                    Bucket=cfg["cos_bucket"],
+                    Key=cos_key,
+                    Params={"partNumber": number, "uploadId": upload_id},
+                    Expired=21600,
+                ),
+            }
+            for number in part_numbers
+        ]
+    except Exception as exc:
+        logger.exception("Gagal membuat URL bagian multipart COS.")
+        raise HTTPException(status_code=502, detail="Gagal menyiapkan unggahan bagian ke COS.") from exc
+
+    return {"parts": part_urls}
+
+
+@app.post("/api/v1/multipart/complete")
+@limiter.limit("10/minute")
+def complete_multipart_upload(
+    request: Request,
+    payload: Dict[str, Any],
+    authorization: str = Header(None),
+):
+    cfg = load_config()
+    server_name = _agent_server_name(authorization, cfg)
+    cos_key = _agent_cos_key(server_name, payload.get("filename"), payload.get("category"))
+    upload_id = payload.get("upload_id")
+    parts = payload.get("parts")
+    if not isinstance(upload_id, str) or not upload_id or len(upload_id) > 1024:
+        raise HTTPException(status_code=400, detail="Upload ID multipart tidak valid.")
+    if not isinstance(parts, list) or not 1 <= len(parts) <= 10_000:
+        raise HTTPException(status_code=400, detail="Daftar bagian multipart tidak valid.")
+
+    cos_parts = []
+    for expected_number, part in enumerate(parts, start=1):
+        if not isinstance(part, dict) or type(part.get("part_number")) is not int:
+            raise HTTPException(status_code=400, detail="Metadata bagian multipart tidak valid.")
+        etag = part.get("etag")
+        if not isinstance(etag, str):
+            raise HTTPException(status_code=400, detail="ETag bagian multipart tidak valid.")
+        normalized_etag = etag[1:-1] if etag.startswith('"') and etag.endswith('"') else etag
+        if not normalized_etag or not re.fullmatch(r"[A-Za-z0-9+/=_-]{1,200}", normalized_etag):
+            raise HTTPException(status_code=400, detail="ETag bagian multipart tidak valid.")
+        if part["part_number"] != expected_number:
+            raise HTTPException(status_code=400, detail="Nomor bagian multipart harus berurutan.")
+        cos_parts.append({"PartNumber": expected_number, "ETag": f'"{normalized_etag}"'})
+
+    try:
+        result = _cos_client(cfg).complete_multipart_upload(
+            Bucket=cfg["cos_bucket"],
+            Key=cos_key,
+            UploadId=upload_id,
+            MultipartUpload={"Part": cos_parts},
+        )
+        if not result.get("ETag"):
+            raise RuntimeError("COS tidak mengonfirmasi penyelesaian multipart upload.")
+    except Exception as exc:
+        logger.exception("Gagal menyelesaikan multipart upload COS.")
+        raise HTTPException(status_code=502, detail="COS gagal menyelesaikan unggahan multipart.") from exc
+
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/multipart/abort")
+@limiter.limit("10/minute")
+def abort_multipart_upload(
+    request: Request,
+    payload: Dict[str, Any],
+    authorization: str = Header(None),
+):
+    cfg = load_config()
+    server_name = _agent_server_name(authorization, cfg)
+    cos_key = _agent_cos_key(server_name, payload.get("filename"), payload.get("category"))
+    upload_id = payload.get("upload_id")
+    if not isinstance(upload_id, str) or not upload_id or len(upload_id) > 1024:
+        raise HTTPException(status_code=400, detail="Upload ID multipart tidak valid.")
+    try:
+        _cos_client(cfg).abort_multipart_upload(
+            Bucket=cfg["cos_bucket"],
+            Key=cos_key,
+            UploadId=upload_id,
+        )
+    except Exception as exc:
+        logger.exception("Gagal membatalkan multipart upload COS.")
+        raise HTTPException(status_code=502, detail="Gagal membersihkan unggahan multipart COS.") from exc
+    return {"status": "aborted"}
 
 
 @app.post("/api/v1/rotate-backups")
