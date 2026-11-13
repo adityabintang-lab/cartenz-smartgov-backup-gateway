@@ -25,6 +25,8 @@ sudo bash setup.sh --bind 0.0.0.0  # hanya jika berada di belakang HTTPS reverse
 sudo bash setup.sh --repo https://github.com/ORG/REPO.git --branch main
 ```
 
+Jika dijalankan dari terminal interaktif, installer meminta direktori pemasangan (default `/opt/smartgov-gateway`).
+Untuk otomasi/non-interaktif, gunakan `--dir /lokasi/yang/diinginkan`.
 Installer aman dijalankan ulang untuk memperbarui source dan membangun ulang image. Data konfigurasi tetap disimpan di `gateway_data/`. Jika Gateway sudah pernah disiapkan, konfigurasi dan token yang ada tidak dihapus.
 
 ## Menjalankan dari source
@@ -58,18 +60,25 @@ Pada kunjungan pertama, wizard meminta:
 
 Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar objek, mengunduh objek, menghapus objek lama, dan menjalankan multipart upload pada prefix backup. Multipart upload memerlukan izin memulai, mengunggah bagian, menyelesaikan, dan membatalkan upload. Izin hapus diperlukan agar retensi otomatis per Agent dapat berjalan. Batasi izin tersebut hanya pada bucket/prefix backup dan aktifkan aturan siklus hidup untuk membersihkan multipart upload yang tidak selesai. Setelah setup, login menggunakan kredensial admin yang dibuat.
 
+Bucket tambahan dapat didaftarkan dari dashboard admin dengan nama tampilan, region, nama bucket, dan kredensial COS
+yang dapat mengaksesnya. Gateway menguji akses baca sebelum menyimpan konfigurasi. Kredensial tiap bucket disimpan
+di `gateway_data/gateway_config.json`; lindungi direktori ini dan berikan setiap kredensial hanya izin yang diperlukan
+pada bucket/prefix backup terkait. Saat membuat token Agent, pilih bucket tujuannya. Token lama tetap diarahkan ke
+bucket awal. Admin dapat memilih bucket pada penelusur arsip; bucket yang masih dipakai token tidak dapat dihapus.
+
 ## Dashboard
 
 Dashboard memakai Bootstrap 5.3.8 dari jsDelivr; browser perlu dapat mengakses CDN agar styling Bootstrap termuat. CSS dipatok versinya dan diverifikasi dengan SRI. Komponen interaktif tetap menggunakan JavaScript aplikasi, tanpa dependensi JavaScript Bootstrap.
 
-- Buat, salin, dan hapus token untuk tiap Agent target.
+- Buat, salin, dan hapus token untuk tiap Agent target, serta tentukan bucket COS tujuan tiap token.
+- Tambah, pilih, dan hapus bucket COS yang tidak sedang digunakan Agent.
 - Telusuri folder berdasarkan nama Agent/daerah pada prefix `backups/`, dengan subfolder `database/` dan `application/`.
 - Lihat ukuran dan waktu perubahan file, berpindah folder, dan memuat halaman berikutnya.
 - Unduh file lewat tautan presigned yang berlaku singkat.
 - Dekripsi arsip `.age` dari browser setelah admin memasukkan private key age. Private key tidak disimpan permanen, tetapi sementara ditulis ke file mode `0600` di `/tmp` untuk dipakai program `age`, lalu file tersebut dihapus. Karena itu lindungi host/container Gateway dan jangan menganggap ini setara decrypt sepenuhnya di perangkat pengguna.
 - Daftarkan user baca-saja memakai email dan password minimal 12 karakter. Akun berstatus pending sampai admin menyetujuinya dan memilih folder Agent yang boleh diakses; admin dapat menolak pendaftaran atau mencabut akses user aktif.
 
-User baca-saja hanya dapat melihat daftar arsip, ukuran, dan waktu perubahan pada folder Agent yang diberikan admin, serta mengunduh file `.age` terenkripsi dalam cakupan tersebut. Batas folder ditegakkan oleh API Gateway. Mereka tidak dapat melihat atau mengelola token, menyetujui akun, mengakses folder Agent lain, mengunduh file non-`.age`, maupun memakai dekripsi. Admin tetap dapat melihat semua fitur termasuk token dan dekripsi. Penghapusan objek lama dilakukan otomatis oleh retensi Agent; dashboard tidak menyediakan penghapusan manual.
+User baca-saja hanya dapat melihat daftar arsip, ukuran, dan waktu perubahan pada folder Agent yang diberikan admin, serta mengunduh file `.age` terenkripsi dalam cakupan tersebut. Jika Agent yang diizinkan berada di beberapa bucket, daftar bucket user otomatis dibatasi ke bucket yang berisi Agent tersebut. Batas folder dan bucket ditegakkan oleh API Gateway. Mereka tidak dapat melihat atau mengelola token, menyetujui akun, mengakses folder Agent atau bucket lain, mengunduh file non-`.age`, maupun memakai dekripsi. Admin tetap dapat melihat semua fitur termasuk token dan dekripsi. Penghapusan objek lama dilakukan otomatis oleh retensi Agent; dashboard tidak menyediakan penghapusan manual.
 
 ### Cara mendekripsi dan memulihkan backup
 

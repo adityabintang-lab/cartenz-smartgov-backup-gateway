@@ -343,6 +343,8 @@ let authHeader = localStorage.getItem('gw_auth') || '';
 let currentRole = '';
 let currentPrefix = 'backups/';
 let nextMarker = '';
+let currentBucketId = localStorage.getItem('gw_bucket') || '';
+let availableBuckets = [];
 
 function showAlert(message, type='err') {
     const box = document.getElementById('alertBox');
@@ -482,23 +484,40 @@ function renderDashboard() {
                 <tbody id="userTable"><tr><td colspan="5" class="muted">Memuat pendaftaran…</td></tr></tbody></table></div>
         </div></section>
         <section class="card mb-3"><div class="card-body">
+            <h2 class="mb-3">Daftar bucket COS</h2>
+            <form id="bucketForm" class="row g-3 align-items-end mb-3" onsubmit="createBucket(event)">
+                <div class="col-12 col-md-4"><label class="form-label" for="bucketLabel">Nama tampilan</label><input class="form-control" id="bucketLabel" maxlength="80" required></div>
+                <div class="col-12 col-md-4"><label class="form-label" for="bucketRegion">Region</label><input class="form-control" id="bucketRegion" placeholder="ap-jakarta" maxlength="64" required></div>
+                <div class="col-12 col-md-4"><label class="form-label" for="bucketNameInput">Nama bucket</label><input class="form-control" id="bucketNameInput" maxlength="256" required></div>
+                <div class="col-12 col-md-6"><label class="form-label" for="bucketSecretId">Secret ID</label><input class="form-control" id="bucketSecretId" autocomplete="off" required></div>
+                <div class="col-12 col-md-6"><label class="form-label" for="bucketSecretKey">Secret Key</label><input class="form-control" id="bucketSecretKey" type="password" autocomplete="new-password" required></div>
+                <div class="col-12"><button class="btn btn-primary" type="submit">Tambah &amp; uji bucket</button></div>
+            </form>
+            <div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Nama</th><th>Bucket COS</th><th>Region</th><th class="right">Aksi</th></tr></thead>
+                <tbody id="bucketTable"><tr><td colspan="4" class="muted">Memuat bucket…</td></tr></tbody></table></div>
+        </div></section>
+        <section class="card mb-3"><div class="card-body">
             <div class="toolbar"><h2>Token Agent Target</h2></div>
             <form class="row g-3 align-items-end mb-3" onsubmit="createToken(event)">
-                <div class="col-12 col-md-8"><label class="form-label" for="serverName">Nama daerah / Agent</label><input class="form-control" id="serverName" placeholder="Contoh: Kabupaten Bogor" maxlength="100" required></div>
+                <div class="col-12 col-md-5"><label class="form-label" for="serverName">Nama daerah / Agent</label><input class="form-control" id="serverName" placeholder="Contoh: Kabupaten Bogor" maxlength="100" required></div>
+                <div class="col-12 col-md-5"><label class="form-label" for="tokenBucket">Bucket tujuan</label><select class="form-select" id="tokenBucket" required></select></div>
                 <div class="col-12 col-md-auto"><button class="btn btn-primary" type="submit">Generate token</button></div>
             </form>
-            <div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Nama server</th><th>Agent API token</th><th class="right">Aksi</th></tr></thead>
-                <tbody id="tokenTable"><tr><td colspan="3" class="muted">Memuat data token…</td></tr></tbody></table></div>
+            <div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Nama server</th><th>Bucket tujuan</th><th>Agent API token</th><th class="right">Aksi</th></tr></thead>
+                <tbody id="tokenTable"><tr><td colspan="4" class="muted">Memuat data token…</td></tr></tbody></table></div>
         </div></section>
         ${bucketBrowserMarkup()}`;
     loadUsers();
-    loadTokens();
-    loadObjects(currentPrefix, '');
+    loadBuckets().then(() => {
+        loadTokens();
+        loadObjects(currentPrefix, '');
+    });
 }
 function bucketBrowserMarkup() {
     return `
         <section class="card mb-3"><div class="card-body">
-            <div class="toolbar"><div><h2>File di Bucket</h2><div class="muted" id="bucketPath">backups/</div></div>
+            <div class="toolbar"><div><h2>File di Bucket</h2><div class="muted" id="bucketPath">backups/</div>
+                <label class="form-label mt-2" for="activeBucket">Bucket yang ditampilkan</label><select class="form-select" id="activeBucket"></select></div>
                 <button class="btn btn-outline-secondary" type="button" onclick="loadObjects(currentPrefix, '')">Muat ulang</button></div>
             <nav class="crumbs" id="breadcrumbs" aria-label="Lokasi bucket"></nav>
             <div class="table-responsive mt-3"><table class="table table-hover align-middle mb-0">
@@ -520,7 +539,109 @@ function renderViewer() {
             <div class="row"><div class="col-12"><div class="k">Bucket</div><div class="v" id="bucketName">Memuat…</div></div></div>
         </div></section>
         ${bucketBrowserMarkup()}`;
-    loadObjects(currentPrefix, '');
+    loadBuckets().then(() => loadObjects(currentPrefix, ''));
+}
+function bucketLabel(bucketId) {
+    const bucket = availableBuckets.find(item => item.id === bucketId);
+    return bucket ? bucket.name + ' (' + bucket.bucket + ')' : 'Bucket tidak tersedia';
+}
+async function loadBuckets() {
+    try {
+        const data = await api('/api/buckets');
+        availableBuckets = data.buckets || [];
+        if (!availableBuckets.some(bucket => bucket.id === currentBucketId)) {
+            currentBucketId = availableBuckets.length ? availableBuckets[0].id : '';
+        }
+        if (currentBucketId) localStorage.setItem('gw_bucket', currentBucketId);
+        const selector = document.getElementById('activeBucket');
+        if (selector) {
+            selector.textContent = '';
+            availableBuckets.forEach(bucket => {
+                const option = document.createElement('option');
+                option.value = bucket.id;
+                option.textContent = bucketLabel(bucket.id);
+                selector.append(option);
+            });
+            selector.value = currentBucketId;
+            selector.disabled = availableBuckets.length < 2;
+            selector.onchange = () => {
+                currentBucketId = selector.value;
+                localStorage.setItem('gw_bucket', currentBucketId);
+                currentPrefix = 'backups/';
+                const table = document.getElementById('bucketName');
+                if (table) table.textContent = bucketLabel(currentBucketId);
+                loadObjects(currentPrefix, '');
+            };
+        }
+        const tokenSelector = document.getElementById('tokenBucket');
+        if (tokenSelector) {
+            tokenSelector.textContent = '';
+            availableBuckets.forEach(bucket => {
+                const option = document.createElement('option');
+                option.value = bucket.id;
+                option.textContent = bucketLabel(bucket.id);
+                tokenSelector.append(option);
+            });
+            tokenSelector.disabled = !availableBuckets.length;
+        }
+        const tbody = document.getElementById('bucketTable');
+        if (tbody) {
+            tbody.textContent = '';
+            if (!availableBuckets.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="muted">Belum ada bucket yang tersedia.</td></tr>';
+            }
+            availableBuckets.forEach(bucket => {
+                const row = document.createElement('tr');
+                const label = document.createElement('td'); label.textContent = bucket.name;
+                const name = document.createElement('td'); name.textContent = bucket.bucket;
+                const region = document.createElement('td'); region.textContent = bucket.region;
+                const actions = document.createElement('td'); actions.className = 'right';
+                const remove = document.createElement('button');
+                remove.className = 'btn btn-sm btn-outline-danger';
+                remove.textContent = 'Hapus';
+                remove.onclick = () => deleteBucket(bucket.id, bucket.name);
+                actions.append(remove);
+                row.append(label, name, region, actions);
+                tbody.append(row);
+            });
+        }
+        const label = document.getElementById('bucketName');
+        if (label) label.textContent = bucketLabel(currentBucketId);
+    } catch (error) {
+        showAlert('Gagal memuat daftar bucket: ' + error.message);
+        availableBuckets = [];
+    }
+}
+async function createBucket(event) {
+    event.preventDefault();
+    const form = document.getElementById('bucketForm');
+    const payload = {
+        name: document.getElementById('bucketLabel').value.trim(),
+        cos_region: document.getElementById('bucketRegion').value.trim(),
+        cos_bucket: document.getElementById('bucketNameInput').value.trim(),
+        cos_secret_id: document.getElementById('bucketSecretId').value.trim(),
+        cos_secret_key: document.getElementById('bucketSecretKey').value
+    };
+    try {
+        await api('/api/buckets', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload)
+        });
+        form.reset();
+        await loadBuckets();
+        showAlert('Bucket ditambahkan dan aksesnya berhasil diuji.', 'ok');
+    } catch (error) { showAlert('Gagal menambahkan bucket: ' + error.message); }
+}
+async function deleteBucket(bucketId, name) {
+    if (!confirm('Hapus konfigurasi bucket ' + name + '? Bucket yang dipakai Agent tidak dapat dihapus.')) return;
+    try {
+        await api('/api/buckets/' + encodeURIComponent(bucketId), {method:'DELETE'});
+        await loadBuckets();
+        loadTokens();
+        loadObjects('backups/', '');
+        showAlert('Bucket berhasil dihapus dari daftar Gateway.', 'ok');
+    } catch (error) { showAlert('Gagal menghapus bucket: ' + error.message); }
 }
 async function loadUsers() {
     const tbody = document.getElementById('userTable');
@@ -605,20 +726,22 @@ async function loadTokens() {
     try {
         const data = await api('/api/tokens');
         const tokens = data.tokens || {};
+        const tokenBuckets = data.token_buckets || {};
         document.getElementById('tokenCount').textContent = Object.keys(tokens).length;
         tbody.textContent = '';
         if (!Object.keys(tokens).length) {
-            tbody.innerHTML = '<tr><td colspan="3" class="muted">Belum ada token agent.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="muted">Belum ada token agent.</td></tr>';
             return;
         }
         Object.entries(tokens).forEach(([token, name]) => {
             const tr = document.createElement('tr');
             const nameCell = document.createElement('td'); nameCell.textContent = name;
+            const bucketCell = document.createElement('td'); bucketCell.textContent = bucketLabel(tokenBuckets[token]);
             const tokenCell = document.createElement('td'); const code = document.createElement('code'); code.textContent = token; tokenCell.append(code);
             const actionCell = document.createElement('td'); actionCell.className = 'right';
             const copy = document.createElement('button'); copy.className = 'btn btn-sm btn-outline-secondary'; copy.textContent = 'Salin'; copy.onclick = () => copyToken(token);
             const remove = document.createElement('button'); remove.className = 'btn btn-sm btn-outline-danger ms-1'; remove.textContent = 'Hapus'; remove.onclick = () => deleteToken(token);
-            actionCell.append(copy, remove); tr.append(nameCell, tokenCell, actionCell); tbody.append(tr);
+            actionCell.append(copy, remove); tr.append(nameCell, bucketCell, tokenCell, actionCell); tbody.append(tr);
         });
     } catch (error) { showAlert('Gagal memuat token: ' + error.message); }
 }
@@ -627,10 +750,13 @@ async function createToken(event) {
     const input = document.getElementById('serverName');
     const name = input.value.trim();
     if (!name) { input.focus(); return; }
+    const bucketId = document.getElementById('tokenBucket').value;
+    if (!bucketId) { showAlert('Tambahkan atau pilih bucket COS terlebih dahulu.'); return; }
     try {
-        const data = await api('/api/tokens/create?server_name=' + encodeURIComponent(name), {method:'POST'});
+        const data = await api('/api/tokens/create?server_name=' + encodeURIComponent(name) +
+            '&bucket_id=' + encodeURIComponent(bucketId), {method:'POST'});
         input.value = '';
-        showAlert('Token dibuat untuk ' + data.server_name + '. Salin token dari daftar.', 'ok');
+        showAlert('Token dibuat untuk ' + data.server_name + ' pada ' + bucketLabel(data.bucket_id) + '. Salin token dari daftar.', 'ok');
         loadTokens();
     } catch (error) { showAlert('Gagal membuat token: ' + error.message); }
 }
@@ -682,9 +808,16 @@ async function loadObjects(prefix, marker) {
     document.getElementById('nextPage').hidden = true;
     try {
         const params = new URLSearchParams({prefix});
+        if (currentBucketId) params.set('bucket_id', currentBucketId);
         if (marker) params.set('marker', marker);
         const data = await api('/api/bucket/objects?' + params.toString());
         document.getElementById('bucketName').textContent = data.bucket;
+        if (data.bucket_id && data.bucket_id !== currentBucketId) {
+            currentBucketId = data.bucket_id;
+            localStorage.setItem('gw_bucket', currentBucketId);
+            const selector = document.getElementById('activeBucket');
+            if (selector) selector.value = currentBucketId;
+        }
         nextMarker = data.next_marker || '';
         tbody.textContent = '';
         const entries = [];
@@ -717,7 +850,7 @@ async function loadObjects(prefix, marker) {
                         const response = await fetch('/api/bucket/decrypt', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json', 'Authorization': authHeader},
-                            body: JSON.stringify({key: entry.key, private_key: privateKey})
+                            body: JSON.stringify({key: entry.key, private_key: privateKey, bucket_id: currentBucketId})
                         });
                         if (!response.ok) {
                             const err = await response.json().catch(() => ({detail: 'Dekripsi gagal.'}));
@@ -759,7 +892,8 @@ async function downloadObject(key) {
     }
     downloadWindow.opener = null;
     try {
-        const data = await api('/api/bucket/download?key=' + encodeURIComponent(key));
+        const data = await api('/api/bucket/download?key=' + encodeURIComponent(key) +
+            '&bucket_id=' + encodeURIComponent(currentBucketId));
         downloadWindow.location = data.download_url;
     } catch (error) {
         downloadWindow.close();
@@ -795,32 +929,158 @@ def api_setup(request: Request, payload: Dict[str, Any]):
         raise HTTPException(status_code=403, detail="Setup Wizard telah selesai digunakan dan dikunci.")
     
     raw_password = payload.get("admin_password", "")
-    if len(raw_password) < 6:
+    if not isinstance(raw_password, str) or len(raw_password) < 6:
         raise HTTPException(status_code=400, detail="Kata sandi admin minimal 6 karakter.")
+    cos_values = {}
+    for key in ("cos_secret_id", "cos_secret_key", "cos_region", "cos_bucket"):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip() or len(value) > 256:
+            raise HTTPException(status_code=400, detail=f"Nilai {key} wajib diisi dan maksimal 256 karakter.")
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise HTTPException(status_code=400, detail=f"Nilai {key} tidak valid.")
+        cos_values[key] = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", cos_values["cos_region"]):
+        raise HTTPException(status_code=400, detail="Region COS tidak valid.")
 
     hashed_pw, salt = hash_password(raw_password)
-    
+    bucket_id = f"b_{secrets.token_hex(8)}"
+    bucket = {
+        "name": cos_values["cos_bucket"],
+        **cos_values,
+    }
     config_data = {
         "admin_user": payload.get("admin_user", "admin"),
         "admin_password_hash": hashed_pw,
         "salt": salt,
-        "cos_secret_id": payload.get("cos_secret_id"),
-        "cos_secret_key": payload.get("cos_secret_key"),
-        "cos_region": payload.get("cos_region"),
-        "cos_bucket": payload.get("cos_bucket"),
+        **cos_values,
+        "cos_buckets": {bucket_id: bucket},
+        "active_bucket_id": bucket_id,
         "tokens": {}
     }
     save_config(config_data)
     return {"status": "ok"}
 
+@app.get("/api/buckets")
+def get_buckets(user: Dict[str, Any] = Depends(get_current_user)):
+    cfg = load_config()
+    records = _bucket_records(cfg)
+    if user["role"] == "viewer":
+        allowed_ids = set(_viewer_bucket_ids(cfg, user))
+    else:
+        allowed_ids = set(records)
+    return {
+        "buckets": [
+            {
+                "id": bucket_id,
+                "name": record.get("name") or record.get("cos_bucket", bucket_id),
+                "bucket": record.get("cos_bucket", ""),
+                "region": record.get("cos_region", ""),
+            }
+            for bucket_id, record in records.items()
+            if bucket_id in allowed_ids
+        ]
+    }
+
+@app.post("/api/buckets")
+def create_bucket(payload: Dict[str, Any], username: str = Depends(verify_credentials)):
+    required = ("name", "cos_region", "cos_bucket", "cos_secret_id", "cos_secret_key")
+    values = {}
+    for key in required:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip() or len(value) > 256:
+            raise HTTPException(status_code=400, detail=f"Nilai {key} wajib diisi dan maksimal 256 karakter.")
+        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise HTTPException(status_code=400, detail=f"Nilai {key} tidak valid.")
+        values[key] = value.strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", values["cos_region"]):
+        raise HTTPException(status_code=400, detail="Region COS tidak valid.")
+    if len(values["name"]) > 80:
+        raise HTTPException(status_code=400, detail="Nama tampilan bucket maksimal 80 karakter.")
+
+    cfg = load_config()
+    records = _bucket_records(cfg)
+    if any(
+        record.get("cos_bucket") == values["cos_bucket"]
+        and record.get("cos_region") == values["cos_region"]
+        for record in records.values()
+    ):
+        raise HTTPException(status_code=409, detail="Bucket dan region tersebut sudah terdaftar.")
+    new_record = {
+        "name": values["name"],
+        "cos_region": values["cos_region"],
+        "cos_bucket": values["cos_bucket"],
+        "cos_secret_id": values["cos_secret_id"],
+        "cos_secret_key": values["cos_secret_key"],
+    }
+    new_bucket_id = f"b_{secrets.token_hex(8)}"
+    try:
+        _cos_client({"cos_buckets": {new_bucket_id: new_record}}, new_bucket_id).list_objects(
+            Bucket=new_record["cos_bucket"], Prefix="backups/", MaxKeys=1
+        )
+    except Exception as exc:
+        logger.exception("Gagal memvalidasi akses ke bucket COS baru.")
+        raise HTTPException(status_code=502, detail="Tidak dapat mengakses bucket COS dengan kredensial tersebut.") from exc
+
+    token_buckets = cfg.get("token_buckets", {})
+    if not isinstance(token_buckets, dict):
+        token_buckets = {}
+    default_id = "legacy" if "legacy" in records else next(iter(records), new_bucket_id)
+    for token in cfg.get("tokens", {}):
+        token_buckets.setdefault(token, default_id)
+    records[new_bucket_id] = new_record
+    cfg["cos_buckets"] = records
+    cfg["token_buckets"] = token_buckets
+    cfg.setdefault("active_bucket_id", default_id)
+    save_config(cfg)
+    return {"id": new_bucket_id, "name": new_record["name"], "bucket": new_record["cos_bucket"]}
+
+@app.delete("/api/buckets/{bucket_id}")
+def delete_bucket(bucket_id: str, username: str = Depends(verify_credentials)):
+    cfg = load_config()
+    records = _bucket_records(cfg)
+    if bucket_id not in records:
+        raise HTTPException(status_code=404, detail="Bucket tidak ditemukan.")
+    tokens = cfg.get("tokens", {})
+    if isinstance(tokens, dict) and any(
+        _token_bucket_id(cfg, token) == bucket_id for token in tokens
+    ):
+        raise HTTPException(status_code=409, detail="Bucket masih digunakan oleh token Agent.")
+    if len(records) <= 1:
+        raise HTTPException(status_code=409, detail="Minimal satu bucket harus tetap terdaftar.")
+    del records[bucket_id]
+    cfg["cos_buckets"] = records
+    if cfg.get("active_bucket_id") == bucket_id:
+        cfg["active_bucket_id"] = next(iter(records))
+    save_config(cfg)
+    return {"status": "ok"}
+
 @app.get("/api/tokens")
 def get_tokens(username: str = Depends(verify_credentials)):
     cfg = load_config()
-    return {"tokens": cfg.get("tokens", {})}
+    tokens = cfg.get("tokens", {})
+    token_buckets = cfg.get("token_buckets", {})
+    if not isinstance(token_buckets, dict):
+        token_buckets = {}
+    return {
+        "tokens": tokens,
+        "token_buckets": {
+            token: token_buckets[token] if token in token_buckets else _token_bucket_id(cfg, token)
+            for token in tokens
+        } if isinstance(tokens, dict) else {},
+    }
 
 @app.post("/api/tokens/create")
-def create_token(server_name: str = Query(..., min_length=1, max_length=100), username: str = Depends(verify_credentials)):
+def create_token(
+    server_name: str = Query(..., min_length=1, max_length=100),
+    bucket_id: str = Query(""),
+    username: str = Depends(verify_credentials),
+):
     cfg = load_config()
+    records = _bucket_records(cfg)
+    if not bucket_id:
+        bucket_id = _default_bucket_id(cfg)
+    if bucket_id not in records:
+        raise HTTPException(status_code=400, detail="Pilih bucket COS yang tersedia.")
     server_name = server_name.strip()
     folder_name = _server_folder_name(server_name)
     if not server_name or not folder_name.strip("_") or any(ord(char) < 32 or ord(char) == 127 for char in server_name):
@@ -830,9 +1090,14 @@ def create_token(server_name: str = Query(..., min_length=1, max_length=100), us
         raise HTTPException(status_code=409, detail="Nama daerah/Agent tersebut sudah digunakan.")
     new_token = f"sgtok_{secrets.token_hex(16)}"
     tokens[new_token] = server_name
+    token_buckets = cfg.get("token_buckets", {})
+    if not isinstance(token_buckets, dict):
+        token_buckets = {}
+    token_buckets[new_token] = bucket_id
     cfg["tokens"] = tokens
+    cfg["token_buckets"] = token_buckets
     save_config(cfg)
-    return {"server_name": server_name, "token": new_token}
+    return {"server_name": server_name, "token": new_token, "bucket_id": bucket_id}
 
 @app.delete("/api/tokens/delete")
 def delete_token(token: str = Query(...), username: str = Depends(verify_credentials)):
@@ -841,15 +1106,81 @@ def delete_token(token: str = Query(...), username: str = Depends(verify_credent
     if token in tokens:
         del tokens[token]
         cfg["tokens"] = tokens
+        token_buckets = cfg.get("token_buckets", {})
+        if isinstance(token_buckets, dict):
+            token_buckets.pop(token, None)
+            cfg["token_buckets"] = token_buckets
         save_config(cfg)
         return {"status": "ok"}
     raise HTTPException(status_code=404, detail="Token tidak ditemukan.")
 
-def _cos_client(cfg: Dict[str, Any]) -> CosS3Client:
+def _bucket_records(cfg: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    configured = cfg.get("cos_buckets")
+    if isinstance(configured, dict):
+        return {
+            bucket_id: record
+            for bucket_id, record in configured.items()
+            if isinstance(bucket_id, str) and isinstance(record, dict)
+        }
+    if all(cfg.get(key) for key in ("cos_region", "cos_bucket", "cos_secret_id", "cos_secret_key")):
+        return {
+            "legacy": {
+                "name": str(cfg["cos_bucket"]),
+                "cos_region": str(cfg["cos_region"]),
+                "cos_bucket": str(cfg["cos_bucket"]),
+                "cos_secret_id": str(cfg["cos_secret_id"]),
+                "cos_secret_key": str(cfg["cos_secret_key"]),
+            }
+        }
+    return {}
+
+
+def _default_bucket_id(cfg: Dict[str, Any]) -> str:
+    records = _bucket_records(cfg)
+    if not records:
+        raise HTTPException(status_code=503, detail="Belum ada bucket COS yang dikonfigurasi.")
+    return next(iter(records))
+
+
+def _token_bucket_id(cfg: Dict[str, Any], token: str) -> str:
+    records = _bucket_records(cfg)
+    token_buckets = cfg.get("token_buckets", {})
+    bucket_id = token_buckets.get(token) if isinstance(token_buckets, dict) else None
+    if bucket_id is None:
+        bucket_id = "legacy" if "legacy" in records else next(iter(records), "")
+    if bucket_id not in records:
+        raise HTTPException(status_code=503, detail="Bucket untuk Agent tidak tersedia.")
+    return bucket_id
+
+
+def _bucket_for_request(cfg: Dict[str, Any], user: Dict[str, Any], bucket_id: str = "") -> tuple[str, Dict[str, str]]:
+    records = _bucket_records(cfg)
+    if user["role"] == "viewer":
+        allowed = _viewer_bucket_ids(cfg, user)
+        if not bucket_id and len(allowed) == 1:
+            bucket_id = allowed[0]
+        if bucket_id not in allowed:
+            raise HTTPException(status_code=403, detail="User tidak memiliki akses ke bucket ini.")
+    elif not bucket_id:
+        bucket_id = cfg.get("active_bucket_id") or _default_bucket_id(cfg)
+    record = records.get(bucket_id)
+    if not isinstance(record, dict):
+        raise HTTPException(status_code=404, detail="Bucket tidak ditemukan.")
+    return bucket_id, record
+
+
+def _cos_client(cfg: Dict[str, Any], bucket_id: str = "") -> CosS3Client:
+    if bucket_id:
+        record = _bucket_records(cfg).get(bucket_id)
+        if not isinstance(record, dict):
+            raise HTTPException(status_code=404, detail="Bucket tidak ditemukan.")
+    else:
+        bucket_id = _default_bucket_id(cfg)
+        record = _bucket_records(cfg)[bucket_id]
     cos_config = CosConfig(
-        Region=cfg["cos_region"],
-        SecretId=cfg["cos_secret_id"],
-        SecretKey=cfg["cos_secret_key"],
+        Region=record["cos_region"],
+        SecretId=record["cos_secret_id"],
+        SecretKey=record["cos_secret_key"],
     )
     return CosS3Client(cos_config)
 
@@ -904,6 +1235,43 @@ def _viewer_folder_prefixes(user: Dict[str, str]) -> list[str]:
     ]
 
 
+def _viewer_bucket_ids(cfg: Dict[str, Any], user: Dict[str, Any]) -> list[str]:
+    folders = set(_viewer_folder_prefixes(user))
+    tokens = cfg.get("tokens", {})
+    if not isinstance(tokens, dict):
+        return []
+    bucket_ids = []
+    for token, server_name in tokens.items():
+        if not isinstance(server_name, str) or f"backups/{_server_folder_name(server_name)}/" not in folders:
+            continue
+        try:
+            bucket_id = _token_bucket_id(cfg, token)
+        except HTTPException:
+            continue
+        if bucket_id not in bucket_ids:
+            bucket_ids.append(bucket_id)
+    return bucket_ids
+
+
+def _viewer_folder_prefixes_for_bucket(
+    cfg: Dict[str, Any], user: Dict[str, Any], bucket_id: str
+) -> list[str]:
+    allowed = set(_viewer_folder_prefixes(user))
+    tokens = cfg.get("tokens", {})
+    if not isinstance(tokens, dict):
+        return []
+    prefixes = []
+    for token, server_name in tokens.items():
+        folder = f"backups/{_server_folder_name(server_name)}/" if isinstance(server_name, str) else ""
+        try:
+            token_bucket_id = _token_bucket_id(cfg, token)
+        except HTTPException:
+            continue
+        if folder in allowed and token_bucket_id == bucket_id and folder not in prefixes:
+            prefixes.append(folder)
+    return prefixes
+
+
 def _agent_server_name(authorization: str, cfg: Dict[str, Any]) -> str:
     scheme, _, token = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not token.strip():
@@ -912,6 +1280,12 @@ def _agent_server_name(authorization: str, cfg: Dict[str, Any]) -> str:
     if not server_name:
         raise HTTPException(status_code=401, detail="Token Target Agent tidak valid.")
     return server_name
+
+
+def _agent_identity(authorization: str, cfg: Dict[str, Any]) -> tuple[str, str]:
+    server_name = _agent_server_name(authorization, cfg)
+    _, _, token = (authorization or "").partition(" ")
+    return server_name, _token_bucket_id(cfg, token.strip())
 
 
 def _server_folder_name(server_name: str) -> str:
@@ -935,6 +1309,7 @@ def _safe_private_key(private_key: str) -> str:
 def list_bucket_objects(
     prefix: str = Query("backups/"),
     marker: str = Query(""),
+    bucket_id: str = Query(""),
     user: Dict[str, str] = Depends(get_current_user),
 ):
     if not _valid_backup_path(prefix, allow_folder=True):
@@ -943,13 +1318,15 @@ def list_bucket_objects(
         raise HTTPException(status_code=400, detail="Penanda halaman tidak valid.")
 
     cfg = load_config()
+    bucket_id, bucket = _bucket_for_request(cfg, user, bucket_id)
     if user["role"] == "viewer":
-        folder_prefixes = _viewer_folder_prefixes(user)
+        folder_prefixes = _viewer_folder_prefixes_for_bucket(cfg, user, bucket_id)
         if prefix == "backups/":
             if marker:
                 raise HTTPException(status_code=400, detail="Penanda halaman tidak valid.")
             return {
-                "bucket": cfg["cos_bucket"],
+                "bucket": bucket.get("name") or bucket["cos_bucket"],
+                "bucket_id": bucket_id,
                 "prefix": prefix,
                 "folders": folder_prefixes,
                 "objects": [],
@@ -963,14 +1340,14 @@ def list_bucket_objects(
 
     try:
         params = {
-            "Bucket": cfg["cos_bucket"],
+            "Bucket": bucket["cos_bucket"],
             "Prefix": prefix,
             "Delimiter": "/",
             "MaxKeys": 100,
         }
         if marker:
             params["Marker"] = marker
-        response = _cos_client(cfg).list_objects(**params)
+        response = _cos_client(cfg, bucket_id).list_objects(**params)
     except Exception as exc:
         logger.exception("Gagal mengambil daftar objek dari COS.")
         raise HTTPException(status_code=502, detail="Gagal mengambil daftar file dari bucket COS.") from exc
@@ -990,7 +1367,8 @@ def list_bucket_objects(
         keys = [item["key"] for item in objects] + folders
         next_marker = max(keys) if keys else marker
     return {
-        "bucket": cfg["cos_bucket"],
+        "bucket": bucket.get("name") or bucket["cos_bucket"],
+        "bucket_id": bucket_id,
         "prefix": prefix,
         "folders": folders,
         "objects": objects,
@@ -1000,20 +1378,25 @@ def list_bucket_objects(
 
 
 @app.get("/api/bucket/download")
-def get_download_url(key: str = Query(...), user: Dict[str, str] = Depends(get_current_user)):
+def get_download_url(
+    key: str = Query(...),
+    bucket_id: str = Query(""),
+    user: Dict[str, str] = Depends(get_current_user),
+):
     if not _valid_backup_path(key, allow_folder=False):
         raise HTTPException(status_code=400, detail="Lokasi file tidak valid.")
     if user["role"] == "viewer" and not key.endswith(".age"):
         raise HTTPException(status_code=403, detail="User biasa hanya dapat mengunduh arsip terenkripsi.")
+    cfg = load_config()
+    bucket_id, bucket = _bucket_for_request(cfg, user, bucket_id)
     if user["role"] == "viewer" and not any(
-        key.startswith(folder) for folder in _viewer_folder_prefixes(user)
+        key.startswith(folder) for folder in _viewer_folder_prefixes_for_bucket(cfg, user, bucket_id)
     ):
         raise HTTPException(status_code=403, detail="User tidak memiliki akses ke folder Agent ini.")
-    cfg = load_config()
     try:
-        download_url = _cos_client(cfg).get_presigned_url(
+        download_url = _cos_client(cfg, bucket_id).get_presigned_url(
             Method="GET",
-            Bucket=cfg["cos_bucket"],
+            Bucket=bucket["cos_bucket"],
             Key=key,
             Expired=300,
         )
@@ -1031,6 +1414,7 @@ async def decrypt_backup(request: Request, payload: Dict[str, Any], username: st
 
     key = str(payload.get("key", "")).strip()
     private_key = str(payload.get("private_key", "")).strip()
+    bucket_id = str(payload.get("bucket_id", "")).strip()
     if not _valid_backup_path(key, allow_folder=False) or not key.endswith(".age"):
         raise HTTPException(status_code=400, detail="Lokasi file arsip tidak valid.")
 
@@ -1043,9 +1427,14 @@ async def decrypt_backup(request: Request, payload: Dict[str, Any], username: st
         raise HTTPException(status_code=500, detail="Program age tidak tersedia di server gateway.")
 
     cfg = load_config()
+    bucket_id, bucket = _bucket_for_request(cfg, {"role": "admin"}, bucket_id)
     body = None
     try:
-        obj = await asyncio.to_thread(_cos_client(cfg).get_object, Bucket=cfg["cos_bucket"], Key=key)
+        obj = await asyncio.to_thread(
+            _cos_client(cfg, bucket_id).get_object,
+            Bucket=bucket["cos_bucket"],
+            Key=key,
+        )
         body = obj.get("Body")
         if body is None:
             raise RuntimeError("COS tidak mengembalikan isi objek.")
@@ -1164,14 +1553,15 @@ def get_upload_url(
     authorization: str = Header(None)  # <--- PERBAIKAN DI SINI
 ):
     cfg = load_config()
-    server_name = _agent_server_name(authorization, cfg)
+    server_name, bucket_id = _agent_identity(authorization, cfg)
+    bucket = _bucket_records(cfg)[bucket_id]
     cos_key = _agent_cos_key(server_name, filename, category)
     try:
-        client = _cos_client(cfg)
+        client = _cos_client(cfg, bucket_id)
         upload_url = client.get_presigned_url(
-            Method="PUT", 
-            Bucket=cfg["cos_bucket"], 
-            Key=cos_key, 
+            Method="PUT",
+            Bucket=bucket["cos_bucket"],
+            Key=cos_key,
             Expired=900
         )
         return {"upload_url": upload_url, "cos_key": cos_key}
@@ -1187,7 +1577,8 @@ def initiate_multipart_upload(
     authorization: str = Header(None),
 ):
     cfg = load_config()
-    server_name = _agent_server_name(authorization, cfg)
+    server_name, bucket_id = _agent_identity(authorization, cfg)
+    bucket = _bucket_records(cfg)[bucket_id]
     filename = payload.get("filename")
     category = payload.get("category")
     file_size = payload.get("file_size")
@@ -1196,8 +1587,8 @@ def initiate_multipart_upload(
     total_parts = (file_size + part_size - 1) // part_size
 
     try:
-        result = _cos_client(cfg).create_multipart_upload(
-            Bucket=cfg["cos_bucket"],
+        result = _cos_client(cfg, bucket_id).create_multipart_upload(
+            Bucket=bucket["cos_bucket"],
             Key=cos_key,
         )
         upload_id = result.get("UploadId")
@@ -1222,7 +1613,8 @@ def get_multipart_part_urls(
     authorization: str = Header(None),
 ):
     cfg = load_config()
-    server_name = _agent_server_name(authorization, cfg)
+    server_name, bucket_id = _agent_identity(authorization, cfg)
+    bucket = _bucket_records(cfg)[bucket_id]
     cos_key = _agent_cos_key(server_name, payload.get("filename"), payload.get("category"))
     upload_id = payload.get("upload_id")
     part_numbers = payload.get("part_numbers")
@@ -1237,13 +1629,13 @@ def get_multipart_part_urls(
         raise HTTPException(status_code=400, detail="Daftar nomor bagian multipart tidak valid.")
 
     try:
-        client = _cos_client(cfg)
+        client = _cos_client(cfg, bucket_id)
         part_urls = [
             {
                 "part_number": number,
                 "upload_url": client.get_presigned_url(
                     Method="PUT",
-                    Bucket=cfg["cos_bucket"],
+                    Bucket=bucket["cos_bucket"],
                     Key=cos_key,
                     Params={"partNumber": number, "uploadId": upload_id},
                     Expired=21600,
@@ -1266,7 +1658,8 @@ def complete_multipart_upload(
     authorization: str = Header(None),
 ):
     cfg = load_config()
-    server_name = _agent_server_name(authorization, cfg)
+    server_name, bucket_id = _agent_identity(authorization, cfg)
+    bucket = _bucket_records(cfg)[bucket_id]
     cos_key = _agent_cos_key(server_name, payload.get("filename"), payload.get("category"))
     upload_id = payload.get("upload_id")
     parts = payload.get("parts")
@@ -1290,8 +1683,8 @@ def complete_multipart_upload(
         cos_parts.append({"PartNumber": expected_number, "ETag": f'"{normalized_etag}"'})
 
     try:
-        result = _cos_client(cfg).complete_multipart_upload(
-            Bucket=cfg["cos_bucket"],
+        result = _cos_client(cfg, bucket_id).complete_multipart_upload(
+            Bucket=bucket["cos_bucket"],
             Key=cos_key,
             UploadId=upload_id,
             MultipartUpload={"Part": cos_parts},
@@ -1313,14 +1706,15 @@ def abort_multipart_upload(
     authorization: str = Header(None),
 ):
     cfg = load_config()
-    server_name = _agent_server_name(authorization, cfg)
+    server_name, bucket_id = _agent_identity(authorization, cfg)
+    bucket = _bucket_records(cfg)[bucket_id]
     cos_key = _agent_cos_key(server_name, payload.get("filename"), payload.get("category"))
     upload_id = payload.get("upload_id")
     if not isinstance(upload_id, str) or not upload_id or len(upload_id) > 1024:
         raise HTTPException(status_code=400, detail="Upload ID multipart tidak valid.")
     try:
-        _cos_client(cfg).abort_multipart_upload(
-            Bucket=cfg["cos_bucket"],
+        _cos_client(cfg, bucket_id).abort_multipart_upload(
+            Bucket=bucket["cos_bucket"],
             Key=cos_key,
             UploadId=upload_id,
         )
@@ -1339,15 +1733,16 @@ def rotate_agent_backups(
     authorization: str = Header(None),
 ):
     cfg = load_config()
-    server_name = _agent_server_name(authorization, cfg)
+    server_name, bucket_id = _agent_identity(authorization, cfg)
+    bucket = _bucket_records(cfg)[bucket_id]
     prefix = f"backups/{_server_folder_name(server_name)}/{category}/"
-    client = _cos_client(cfg)
+    client = _cos_client(cfg, bucket_id)
     objects = []
     marker = ""
     try:
         while True:
             params = {
-                "Bucket": cfg["cos_bucket"],
+                "Bucket": bucket["cos_bucket"],
                 "Prefix": prefix,
                 "MaxKeys": 1000,
             }
@@ -1376,7 +1771,7 @@ def rotate_agent_backups(
         for offset in range(0, len(oldest_keys), 1000):
             batch = oldest_keys[offset:offset + 1000]
             result = client.delete_objects(
-                Bucket=cfg["cos_bucket"],
+                Bucket=bucket["cos_bucket"],
                 Delete={"Quiet": True, "Object": [{"Key": key} for key in batch]},
             )
             if result.get("Errors"):

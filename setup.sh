@@ -4,6 +4,7 @@
 set -Eeuo pipefail
 
 APP_DIR="/opt/smartgov-gateway"
+APP_DIR_SET=0
 REPO_URL="${REPO_URL:-https://github.com/adityabintang-lab/cartenz-smartgov-backup-gateway.git}"
 BRANCH="main"
 CONTAINER="cartenz-smartgov-backup-gateway"
@@ -15,7 +16,7 @@ trap 'echo "ERROR: setup berhenti di baris $LINENO." >&2' ERR
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --dir)    [ $# -ge 2 ] || die "--dir membutuhkan lokasi."; APP_DIR="$2"; shift 2 ;;
+        --dir)    [ $# -ge 2 ] || die "--dir membutuhkan lokasi."; APP_DIR="$2"; APP_DIR_SET=1; shift 2 ;;
         --repo)   [ $# -ge 2 ] || die "--repo membutuhkan URL."; REPO_URL="$2"; shift 2 ;;
         --branch) [ $# -ge 2 ] || die "--branch membutuhkan nama branch."; BRANCH="$2"; shift 2 ;;
         --bind)   [ $# -ge 2 ] || die "--bind membutuhkan alamat."; BIND_ADDR="$2"; shift 2 ;;
@@ -27,6 +28,10 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+if [ "$APP_DIR_SET" -eq 0 ] && [ -t 0 ]; then
+    read -r -p "Direktori instalasi Gateway [${APP_DIR}]: " INPUT_APP_DIR
+    APP_DIR="${INPUT_APP_DIR:-$APP_DIR}"
+fi
 if [ -n "$BIND_ADDR" ] && ! [[ "$BIND_ADDR" =~ ^[0-9a-fA-F:.]+$ ]]; then
     die "Alamat --bind tidak valid: $BIND_ADDR"
 fi
