@@ -60,6 +60,8 @@ Siapkan kredensial COS dengan izin membuat presigned upload URL, membaca daftar 
 
 ## Dashboard
 
+Dashboard memakai Bootstrap 5.3.8 dari jsDelivr; browser perlu dapat mengakses CDN agar styling Bootstrap termuat. CSS dipatok versinya dan diverifikasi dengan SRI. Komponen interaktif tetap menggunakan JavaScript aplikasi, tanpa dependensi JavaScript Bootstrap.
+
 - Buat, salin, dan hapus token untuk tiap Agent target.
 - Telusuri folder berdasarkan nama Agent/daerah pada prefix `backups/`, dengan subfolder `database/` dan `application/`.
 - Lihat ukuran dan waktu perubahan file, berpindah folder, dan memuat halaman berikutnya.

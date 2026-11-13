@@ -293,61 +293,45 @@ def index():
     <meta name="color-scheme" content="dark light">
     <meta name="robots" content="noindex,nofollow">
     <title>SmartGOV Backup Gateway</title>
+    <script>document.documentElement.dataset.bsTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';</script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
     <style>
         :root { color-scheme: dark light; --bg:#0f172a; --card:#1e293b; --bd:#334155; --fg:#f8fafc;
-            --mut:#94a3b8; --in:#0f172a; --pri:#2563eb; --link:#60a5fa; --ok:#4ade80; --warn:#fbbf24; --err:#f87171; }
+            --mut:#94a3b8; --in:#0f172a; --pri:#2563eb; --link:#60a5fa; --ok:#4ade80; --warn:#fbbf24; --err:#f87171;
+            --bs-body-bg:var(--bg); --bs-body-color:var(--fg); --bs-secondary-color:var(--mut);
+            --bs-border-color:var(--bd); --bs-tertiary-bg:var(--in); --bs-card-bg:var(--card); --bs-card-border-color:var(--bd); }
         @media (prefers-color-scheme:light) {
             :root { --bg:#f1f5f9; --card:#fff; --bd:#cbd5e1; --fg:#0f172a; --mut:#475569;
-                --in:#fff; --link:#1d4ed8; --ok:#15803d; --warn:#b45309; --err:#b91c1c; }
+                --in:#fff; --link:#1d4ed8; --ok:#15803d; --warn:#b45309; --err:#b91c1c; --bs-card-bg:#fff; }
         }
-        *,*::before,*::after { box-sizing:border-box; }
         [hidden] { display:none!important; }
-        body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
-        .wrap { max-width:1100px; margin:0 auto; padding:24px 16px 64px; }
-        .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:20px; }
-        h1 { font-size:1.5rem; margin:0 0 4px; } h2 { font-size:1.05rem; margin:0 0 12px; }
-        .sub { color:var(--mut); margin:0 0 20px; }
-        .card { background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:20px; margin-bottom:16px; }
-        .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin-bottom:16px; }
+        body { min-height:100vh; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
+        .card { border-radius:12px; }
+        h1 { font-size:1.5rem; margin:0 0 4px; } h2 { font-size:1.05rem; }
+        .sub { color:var(--mut); }
         .k { color:var(--mut); font-size:.78rem; text-transform:uppercase; letter-spacing:.05em; }
         .v { font-weight:600; word-break:break-word; }
-        .actions,.toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
-        .toolbar { justify-content:space-between; margin-bottom:12px; }
-        .banner,.notice { border:1px solid currentColor; border-radius:8px; padding:10px 14px; margin-bottom:12px; white-space:pre-line; }
-        .ok { color:var(--ok); } .warn { color:var(--warn); } .err { color:var(--err); }
-        button { min-height:42px; padding:8px 14px; font:inherit; color:inherit; background:transparent;
-            border:1px solid var(--bd); border-radius:8px; cursor:pointer; }
-        button.primary { background:var(--pri); border-color:var(--pri); color:#fff; font-weight:600; }
-        button:disabled { opacity:.6; cursor:not-allowed; }
-        input,select { width:100%; min-height:44px; padding:8px 12px; font:inherit; color:inherit;
-            background:var(--in); border:1px solid var(--bd); border-radius:8px; }
-        label { display:block; font-size:.9rem; margin-bottom:4px; }
-        .field { min-width:0; flex:1 1 220px; }
-        .form-row { display:flex; flex-wrap:wrap; gap:12px; align-items:end; }
+        .actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+        .toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:.75rem; margin-bottom:12px; }
+        .field { min-width:0; }
+        .form-control,.form-select { min-height:44px; }
         .scroll { overflow-x:auto; }
-        table { width:100%; border-collapse:collapse; font-size:.9rem; }
-        th,td { text-align:left; padding:10px 8px; border-bottom:1px solid var(--bd); vertical-align:middle; }
-        th { color:var(--mut); font-weight:600; }
         td code { color:var(--link); word-break:break-all; }
         .right { text-align:right; white-space:nowrap; }
         .muted { color:var(--mut); }
         .crumbs { display:flex; flex-wrap:wrap; gap:6px; align-items:center; color:var(--mut); }
-        .crumbs button { min-height:34px; padding:3px 8px; color:var(--link); }
-        .folder { color:var(--link); }
-        details>summary { cursor:pointer; min-height:42px; display:flex; align-items:center; font-weight:600; }
+        details>summary { cursor:pointer; font-weight:600; }
         :focus-visible { outline:3px solid var(--link); outline-offset:2px; }
         @media(max-width:600px) {
-            .wrap { padding:18px 12px 40px; }
-            .topbar { align-items:flex-start; }
-            .card { padding:16px; }
             .right { white-space:normal; }
         }
     </style>
 </head>
 <body>
-<main class="wrap">
-    <header class="topbar">
-        <div><h1>SmartGOV Backup Gateway</h1><p class="sub">Manajemen token agent dan arsip Object Storage.</p></div>
+<main class="container py-4 pb-5">
+    <header class="d-flex justify-content-between align-items-center gap-3 mb-4">
+        <div><h1>SmartGOV Backup Gateway</h1><p class="sub mb-0">Manajemen token agent dan arsip Object Storage.</p></div>
         <div id="authStatus"></div>
     </header>
     <div id="alertBox" role="status" aria-live="polite"></div>
@@ -362,7 +346,7 @@ let nextMarker = '';
 
 function showAlert(message, type='err') {
     const box = document.getElementById('alertBox');
-    box.className = message ? 'notice ' + type : '';
+    box.className = message ? 'alert alert-' + (type === 'ok' ? 'success' : 'danger') : '';
     box.textContent = message;
 }
 async function api(url, options={}) {
@@ -386,16 +370,16 @@ function logout() {
 }
 function renderLoginForm() {
     document.getElementById('app').innerHTML = `
-        <section class="card" style="max-width:450px;margin:40px auto">
-            <h2>Masuk ke Gateway</h2>
+        <section class="card mx-auto my-5" style="max-width:450px"><div class="card-body">
+            <h2 class="mb-3">Masuk ke Gateway</h2>
             <form id="loginForm" onsubmit="handleLogin(event)">
-                <div class="field"><label for="login_user">Email atau username admin</label><input id="login_user" type="text" autocomplete="username" required></div>
-                <div class="field" style="margin-top:12px"><label for="login_pass">Password</label><input id="login_pass" type="password" autocomplete="current-password" required></div>
-                <button class="primary" style="width:100%;margin-top:16px">Masuk</button>
+                <div class="mb-3"><label class="form-label" for="login_user">Email atau username admin</label><input class="form-control" id="login_user" type="text" autocomplete="username" required></div>
+                <div class="mb-3"><label class="form-label" for="login_pass">Password</label><input class="form-control" id="login_pass" type="password" autocomplete="current-password" required></div>
+                <button class="btn btn-primary w-100">Masuk</button>
             </form>
-            <hr style="border:0;border-top:1px solid var(--bd);margin:20px 0">
-            <button type="button" onclick="renderRegisterForm()">Daftar sebagai user biasa</button>
-        </section>`;
+            <hr class="my-4">
+            <button class="btn btn-outline-secondary" type="button" onclick="renderRegisterForm()">Daftar sebagai user biasa</button>
+        </div></section>`;
 }
 async function handleLogin(event) {
     event.preventDefault();
@@ -415,16 +399,16 @@ async function handleLogin(event) {
 }
 function renderRegisterForm() {
     document.getElementById('app').innerHTML = `
-        <section class="card" style="max-width:450px;margin:40px auto">
-            <h2>Daftar user biasa</h2>
+        <section class="card mx-auto my-5" style="max-width:450px"><div class="card-body">
+            <h2 class="mb-3">Daftar user biasa</h2>
             <p class="muted">Akses diberikan setelah admin Gateway menyetujui pendaftaran.</p>
             <form onsubmit="handleRegister(event)">
-                <div class="field"><label for="register_email">Email</label><input id="register_email" type="email" maxlength="254" autocomplete="email" required></div>
-                <div class="field" style="margin-top:12px"><label for="register_password">Password (minimal 12 karakter)</label><input id="register_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></div>
-                <button class="primary" style="width:100%;margin-top:16px">Kirim pendaftaran</button>
+                <div class="mb-3"><label class="form-label" for="register_email">Email</label><input class="form-control" id="register_email" type="email" maxlength="254" autocomplete="email" required></div>
+                <div class="mb-3"><label class="form-label" for="register_password">Password (minimal 12 karakter)</label><input class="form-control" id="register_password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required></div>
+                <button class="btn btn-primary w-100">Kirim pendaftaran</button>
             </form>
-            <button type="button" style="margin-top:12px" onclick="renderLoginForm()">Kembali ke login</button>
-        </section>`;
+            <button class="btn btn-outline-secondary mt-3" type="button" onclick="renderLoginForm()">Kembali ke login</button>
+        </div></section>`;
 }
 async function handleRegister(event) {
     event.preventDefault();
@@ -443,25 +427,25 @@ async function handleRegister(event) {
 }
 function renderSetupWizard() {
     document.getElementById('app').innerHTML = `
-        <section class="card">
-            <h2>Setup Gateway</h2>
+        <section class="card mb-3"><div class="card-body">
+            <h2 class="mb-3">Setup Gateway</h2>
             <p class="muted">Konfigurasikan akun admin dan koneksi Tencent Cloud COS.</p>
             <form id="setupForm" onsubmit="saveSetup(event)">
-                <h3>Keamanan admin</h3>
-                <div class="form-row">
-                    <div class="field"><label for="admin_user">Username admin</label><input id="admin_user" value="admin" required></div>
-                    <div class="field"><label for="admin_pass">Password admin (minimal 6 karakter)</label><input id="admin_pass" type="password" minlength="6" required></div>
+                <h3 class="h5 mt-4">Keamanan admin</h3>
+                <div class="row g-3">
+                    <div class="col-12 col-md-6"><label class="form-label" for="admin_user">Username admin</label><input class="form-control" id="admin_user" value="admin" required></div>
+                    <div class="col-12 col-md-6"><label class="form-label" for="admin_pass">Password admin (minimal 6 karakter)</label><input class="form-control" id="admin_pass" type="password" minlength="6" required></div>
                 </div>
-                <h3 style="margin-top:20px">Tencent Cloud COS</h3>
-                <div class="form-row">
-                    <div class="field"><label for="cos_id">Secret ID</label><input id="cos_id" required></div>
-                    <div class="field"><label for="cos_key">Secret Key</label><input id="cos_key" type="password" required></div>
-                    <div class="field"><label for="cos_region">Region</label><input id="cos_region" placeholder="ap-jakarta" required></div>
-                    <div class="field"><label for="cos_bucket">Bucket</label><input id="cos_bucket" placeholder="nama-bucket-1234567890" required></div>
+                <h3 class="h5 mt-4">Tencent Cloud COS</h3>
+                <div class="row g-3">
+                    <div class="col-12 col-md-6"><label class="form-label" for="cos_id">Secret ID</label><input class="form-control" id="cos_id" required></div>
+                    <div class="col-12 col-md-6"><label class="form-label" for="cos_key">Secret Key</label><input class="form-control" id="cos_key" type="password" required></div>
+                    <div class="col-12 col-md-6"><label class="form-label" for="cos_region">Region</label><input class="form-control" id="cos_region" placeholder="ap-jakarta" required></div>
+                    <div class="col-12 col-md-6"><label class="form-label" for="cos_bucket">Bucket</label><input class="form-control" id="cos_bucket" placeholder="nama-bucket-1234567890" required></div>
                 </div>
-                <button class="primary" style="margin-top:16px">Simpan &amp; aktifkan Gateway</button>
+                <button class="btn btn-primary mt-3">Simpan &amp; aktifkan Gateway</button>
             </form>
-        </section>`;
+        </div></section>`;
 }
 async function saveSetup(event) {
     event.preventDefault();
@@ -481,31 +465,31 @@ async function saveSetup(event) {
 }
 function renderDashboard() {
     currentRole = 'admin';
-    document.getElementById('authStatus').innerHTML = '<button type="button" onclick="logout()">Keluar</button>';
+    document.getElementById('authStatus').innerHTML = '<button class="btn btn-outline-secondary" type="button" onclick="logout()">Keluar</button>';
     document.getElementById('app').innerHTML = `
-        <section class="card">
-            <h2>Ringkasan Gateway</h2>
-            <div class="grid">
-                <div><div class="k">Bucket aktif</div><div class="v" id="bucketName">Memuat…</div></div>
-                <div><div class="k">Token agent</div><div class="v" id="tokenCount">Memuat…</div></div>
-                <div><div class="k">Lokasi arsip</div><div class="v">backups/</div></div>
+        <section class="card mb-3"><div class="card-body">
+            <h2 class="mb-3">Ringkasan Gateway</h2>
+            <div class="row g-3">
+                <div class="col-12 col-md-4"><div class="k">Bucket aktif</div><div class="v" id="bucketName">Memuat…</div></div>
+                <div class="col-12 col-md-4"><div class="k">Token agent</div><div class="v" id="tokenCount">Memuat…</div></div>
+                <div class="col-12 col-md-4"><div class="k">Lokasi arsip</div><div class="v">backups/</div></div>
             </div>
-        </section>
-        <section class="card">
+        </div></section>
+        <section class="card mb-3"><div class="card-body">
             <div class="toolbar"><div><h2>Pendaftaran user</h2><div class="muted">Setujui atau tolak permintaan akses baca-saja.</div></div>
-                <button type="button" onclick="loadUsers()">Muat ulang</button></div>
-            <div class="scroll"><table><thead><tr><th>Email</th><th>Status</th><th>Agent diizinkan</th><th>Terdaftar</th><th class="right">Aksi</th></tr></thead>
+                <button class="btn btn-outline-secondary" type="button" onclick="loadUsers()">Muat ulang</button></div>
+            <div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Email</th><th>Status</th><th>Agent diizinkan</th><th>Terdaftar</th><th class="right">Aksi</th></tr></thead>
                 <tbody id="userTable"><tr><td colspan="5" class="muted">Memuat pendaftaran…</td></tr></tbody></table></div>
-        </section>
-        <section class="card">
+        </div></section>
+        <section class="card mb-3"><div class="card-body">
             <div class="toolbar"><h2>Token Agent Target</h2></div>
-            <form class="form-row" onsubmit="createToken(event)" style="margin-bottom:14px">
-                <div class="field"><label for="serverName">Nama daerah / Agent</label><input id="serverName" placeholder="Contoh: Kabupaten Bogor" maxlength="100" required></div>
-                <button class="primary" type="submit">Generate token</button>
+            <form class="row g-3 align-items-end mb-3" onsubmit="createToken(event)">
+                <div class="col-12 col-md-8"><label class="form-label" for="serverName">Nama daerah / Agent</label><input class="form-control" id="serverName" placeholder="Contoh: Kabupaten Bogor" maxlength="100" required></div>
+                <div class="col-12 col-md-auto"><button class="btn btn-primary" type="submit">Generate token</button></div>
             </form>
-            <div class="scroll"><table><thead><tr><th>Nama server</th><th>Agent API token</th><th class="right">Aksi</th></tr></thead>
+            <div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr><th>Nama server</th><th>Agent API token</th><th class="right">Aksi</th></tr></thead>
                 <tbody id="tokenTable"><tr><td colspan="3" class="muted">Memuat data token…</td></tr></tbody></table></div>
-        </section>
+        </div></section>
         ${bucketBrowserMarkup()}`;
     loadUsers();
     loadTokens();
@@ -513,28 +497,28 @@ function renderDashboard() {
 }
 function bucketBrowserMarkup() {
     return `
-        <section class="card">
+        <section class="card mb-3"><div class="card-body">
             <div class="toolbar"><div><h2>File di Bucket</h2><div class="muted" id="bucketPath">backups/</div></div>
-                <button type="button" onclick="loadObjects(currentPrefix, '')">Muat ulang</button></div>
+                <button class="btn btn-outline-secondary" type="button" onclick="loadObjects(currentPrefix, '')">Muat ulang</button></div>
             <nav class="crumbs" id="breadcrumbs" aria-label="Lokasi bucket"></nav>
-            <div class="scroll" style="margin-top:10px"><table>
+            <div class="table-responsive mt-3"><table class="table table-hover align-middle mb-0">
                 <thead><tr><th>Nama file / folder</th><th>Ukuran</th><th>Terakhir diubah</th><th class="right">Aksi</th></tr></thead>
                 <tbody id="objectTable"><tr><td colspan="4" class="muted">Memuat daftar bucket…</td></tr></tbody>
             </table></div>
-            <div class="actions" style="justify-content:space-between;margin-top:12px">
-                <span class="muted" id="objectPage"></span><button id="nextPage" type="button" hidden>Berikutnya</button>
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3">
+                <span class="muted" id="objectPage"></span><button class="btn btn-outline-secondary" id="nextPage" type="button" hidden>Berikutnya</button>
             </div>
-        </section>`;
+        </div></section>`;
 }
 function renderViewer() {
     currentRole = 'viewer';
-    document.getElementById('authStatus').innerHTML = '<button type="button" onclick="logout()">Keluar</button>';
+    document.getElementById('authStatus').innerHTML = '<button class="btn btn-outline-secondary" type="button" onclick="logout()">Keluar</button>';
     document.getElementById('app').innerHTML = `
-        <section class="card">
+        <section class="card mb-3"><div class="card-body">
             <h2>Arsip backup</h2>
             <p class="muted">Akses baca-saja. File yang diunduh tetap terenkripsi; fitur token dan dekripsi hanya tersedia untuk admin.</p>
-            <div class="grid"><div><div class="k">Bucket</div><div class="v" id="bucketName">Memuat…</div></div></div>
-        </section>
+            <div class="row"><div class="col-12"><div class="k">Bucket</div><div class="v" id="bucketName">Memuat…</div></div></div>
+        </div></section>
         ${bucketBrowserMarkup()}`;
     loadObjects(currentPrefix, '');
 }
@@ -559,6 +543,7 @@ async function loadUsers() {
             const actions = document.createElement('td'); actions.className = 'right';
             if (user.status === 'pending') {
                 const select = document.createElement('select');
+                select.className = 'form-select';
                 select.multiple = true;
                 select.size = Math.min(Math.max(agents.length, 2), 5);
                 select.setAttribute('aria-label', 'Pilih Agent yang boleh dilihat user ini');
@@ -569,9 +554,9 @@ async function loadUsers() {
                     select.append(option);
                 });
                 scope.append(select);
-                const approve = document.createElement('button'); approve.textContent = 'Setujui'; approve.disabled = !agents.length;
+                const approve = document.createElement('button'); approve.className = 'btn btn-sm btn-success'; approve.textContent = 'Setujui'; approve.disabled = !agents.length;
                 approve.onclick = () => approveUser(user.email, select);
-                const reject = document.createElement('button'); reject.textContent = 'Tolak'; reject.style.marginLeft = '6px'; reject.onclick = () => rejectUser(user.email);
+                const reject = document.createElement('button'); reject.className = 'btn btn-sm btn-outline-danger ms-1'; reject.textContent = 'Tolak'; reject.onclick = () => rejectUser(user.email);
                 actions.append(approve, reject);
             } else {
                 const labels = (user.folders || []).map(folder => {
@@ -579,7 +564,7 @@ async function loadUsers() {
                     return agent ? agent.name : folder;
                 });
                 scope.textContent = labels.join(', ') || 'Tidak ada Agent diizinkan';
-                const revoke = document.createElement('button'); revoke.textContent = 'Cabut akses'; revoke.onclick = () => revokeUser(user.email);
+                const revoke = document.createElement('button'); revoke.className = 'btn btn-sm btn-outline-danger'; revoke.textContent = 'Cabut akses'; revoke.onclick = () => revokeUser(user.email);
                 actions.append(revoke);
             }
             tr.append(email, status, scope, created, actions); tbody.append(tr);
@@ -631,8 +616,8 @@ async function loadTokens() {
             const nameCell = document.createElement('td'); nameCell.textContent = name;
             const tokenCell = document.createElement('td'); const code = document.createElement('code'); code.textContent = token; tokenCell.append(code);
             const actionCell = document.createElement('td'); actionCell.className = 'right';
-            const copy = document.createElement('button'); copy.textContent = 'Salin'; copy.onclick = () => copyToken(token);
-            const remove = document.createElement('button'); remove.textContent = 'Hapus'; remove.style.marginLeft = '6px'; remove.onclick = () => deleteToken(token);
+            const copy = document.createElement('button'); copy.className = 'btn btn-sm btn-outline-secondary'; copy.textContent = 'Salin'; copy.onclick = () => copyToken(token);
+            const remove = document.createElement('button'); remove.className = 'btn btn-sm btn-outline-danger ms-1'; remove.textContent = 'Hapus'; remove.onclick = () => deleteToken(token);
             actionCell.append(copy, remove); tr.append(nameCell, tokenCell, actionCell); tbody.append(tr);
         });
     } catch (error) { showAlert('Gagal memuat token: ' + error.message); }
@@ -666,14 +651,14 @@ async function deleteToken(token) {
 function renderBreadcrumbs(prefix) {
     const nav = document.getElementById('breadcrumbs');
     nav.textContent = '';
-    const root = document.createElement('button'); root.textContent = 'backups'; root.onclick = () => loadObjects('backups/', '');
+    const root = document.createElement('button'); root.className = 'btn btn-sm btn-link p-0'; root.textContent = 'backups'; root.onclick = () => loadObjects('backups/', '');
     nav.append(root);
     const parts = prefix.slice('backups/'.length).split('/').filter(Boolean);
     let path = 'backups/';
     parts.forEach(part => {
         const sep = document.createElement('span'); sep.textContent = '/'; nav.append(sep);
         path += part + '/';
-        const button = document.createElement('button'); button.textContent = part;
+        const button = document.createElement('button'); button.className = 'btn btn-sm btn-link p-0'; button.textContent = part;
         const target = path; button.onclick = () => loadObjects(target, '');
         nav.append(button);
     });
@@ -713,7 +698,7 @@ async function loadObjects(prefix, marker) {
             const nameCell = document.createElement('td');
             const label = entry.folder ? entry.key.slice(prefix.length, -1) : entry.key.slice(prefix.length);
             if (entry.folder) {
-                const button = document.createElement('button'); button.className = 'folder'; button.textContent = '📁 ' + label;
+                const button = document.createElement('button'); button.className = 'btn btn-link p-0 text-start'; button.textContent = '📁 ' + label;
                 button.onclick = () => loadObjects(entry.key, '');
                 nameCell.append(button);
             } else nameCell.textContent = label;
@@ -721,11 +706,10 @@ async function loadObjects(prefix, marker) {
             const modified = document.createElement('td'); modified.textContent = entry.folder ? '—' : formatDate(entry.last_modified);
             const actions = document.createElement('td'); actions.className = 'right';
             if (!entry.folder) {
-                const download = document.createElement('button'); download.textContent = 'Unduh';
+                const download = document.createElement('button'); download.className = 'btn btn-sm btn-outline-secondary'; download.textContent = 'Unduh';
                 download.onclick = () => downloadObject(entry.key);
                 if (currentRole === 'admin') {
-                const decrypt = document.createElement('button'); decrypt.textContent = 'Dekripsi';
-                decrypt.style.marginLeft = '6px';
+                const decrypt = document.createElement('button'); decrypt.className = 'btn btn-sm btn-primary ms-1'; decrypt.textContent = 'Dekripsi';
                 decrypt.onclick = async () => {
                     const privateKey = window.prompt('Masukkan private key age dari file kunci-backup.txt (teks lengkap):');
                     if (!privateKey) return;
